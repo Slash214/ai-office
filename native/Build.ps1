@@ -1,5 +1,24 @@
 # Rebuild the x64 office launcher on Windows with the .NET Framework compiler.
 $ErrorActionPreference = 'Stop'
+
+function Get-OfficeStreamSha256([System.IO.Stream] $Stream) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        [BitConverter]::ToString($sha.ComputeHash($Stream)).Replace('-', '')
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-OfficeFileSha256([string] $Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        Get-OfficeStreamSha256 $stream
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 $root = Split-Path $PSScriptRoot
 $version = '1.0.3537.50'
 $cache = Join-Path $root '.office-tools'
@@ -10,7 +29,7 @@ if (!(Test-Path -LiteralPath $sdk)) {
     $uri = "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/$version/microsoft.web.webview2.$version.nupkg"
     Invoke-WebRequest -UseBasicParsing $uri -OutFile $sdk
 }
-if ((Get-FileHash -LiteralPath $sdk).Hash -ne '5EA526BBD728ADDA0DA4D31219267E96460494A427E4894C4E09D9F320F4B9AA') {
+if ((Get-OfficeFileSha256 $sdk) -ne '5EA526BBD728ADDA0DA4D31219267E96460494A427E4894C4E09D9F320F4B9AA') {
     throw 'The Microsoft WebView2 SDK package hash does not match the pinned release.'
 }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -20,10 +39,9 @@ try {
         $entry = $archive.GetEntry($name)
         $destination = Join-Path $runtime $entry.Name
         if (Test-Path -LiteralPath $destination) {
-            $stored = (Get-FileHash -LiteralPath $destination).Hash
+            $stored = Get-OfficeFileSha256 $destination
             $stream = $entry.Open()
-            $sha = [Security.Cryptography.SHA256]::Create()
-            try { $expected = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '') } finally { $sha.Dispose(); $stream.Dispose() }
+            try { $expected = Get-OfficeStreamSha256 $stream } finally { $stream.Dispose() }
             if ($stored -eq $expected) { continue }
         }
         [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destination, $true)
