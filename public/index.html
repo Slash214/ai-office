@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b1021"><title>【呵呵】AI工作室 · 总裁办公室</title>
+  <link rel="icon" href="/brand.svg" type="image/svg+xml"><link rel="stylesheet" href="/studio.css">
+  <script type="module" src="/studio.js"></script>
+</head>
+<body>
+<header class="mast"><div class="wrap mast-inner">
+  <a class="brand" href="#office"><img src="/brand.svg" alt="" width="36" height="36"><b>【呵呵】AI工作室</b></a>
+  <nav aria-label="工作室导航"><a href="#office" class="current">办公室</a><a href="#desk">任务台</a><button id="guide">接入指南</button></nav>
+  <button id="wall-switch" class="secondary" hidden aria-pressed="false">开启桌面壁纸</button><span class="clock" title="本地时间"><i data-icon="clock"></i><time id="clock">--:--</time></span>
+</div></header>
+<main class="wrap" id="office">
+  <section class="intro"><div><h1>总裁指挥中心</h1><p>你定目标，Carbon 规划，Astra 分工，成果回到任务台。</p></div>
+    <div class="mode" role="group" aria-label="数据模式"><button id="live" aria-pressed="true"><i data-icon="radio"></i>实时</button><button id="demo" aria-pressed="false"><i data-icon="play"></i>演示</button></div>
+  </section>
+  <div class="workspace">
+    <section class="panel scene" id="scene-panel" aria-labelledby="scene-title">
+      <div class="bar"><h2 id="scene-title"><i data-icon="cube"></i>三维指挥舱</h2><div class="tools"><button id="fx-toggle" aria-label="绚彩光效" aria-pressed="true"><i data-icon="prism"></i><span>绚彩光效</span></button><button id="light" aria-label="切换灯光" title="切换灯光"></button><button id="sound" aria-label="环境音乐" aria-pressed="false" title="环境音乐"><i data-icon="mute"></i></button><button id="expand" aria-label="放大空间视图" title="放大空间视图"><i data-icon="expand"></i></button></div></div>
+      <div class="viewport"><div class="viewport-label"><b></b><span id="scene-mode">连接中</span></div><div id="canvas" aria-label="可以旋转、缩放的三维办公室"></div><button id="desk-lens" hidden title="返回全景"><span></span><i data-icon="close"></i></button><button class="chatter-toggle" id="chatter" aria-pressed="true" title="显示预写的办公室闲聊。真实任务状态见团队成员。"><i data-icon="chat"></i>场景闲聊</button><span class="view-label" id="lighting-label">日间</span></div>
+      <div class="camera"><div class="camera-presets" role="group" aria-label="切换视角"><button data-view="overview" aria-pressed="true">全景</button><button data-view="workstations" aria-pressed="false">工位</button><button data-view="meeting" aria-pressed="false">会议区</button><button data-view="lounge" aria-pressed="false">休闲区</button></div><div class="camera-zoom" role="group" aria-label="场景缩放"><button id="zoom-out" aria-label="缩小" title="缩小"><i data-icon="minus"></i></button><button id="reset-view" title="重置视角与缩放" aria-label="重置视角与缩放">100%</button><button id="zoom-in" aria-label="放大" title="放大"><i data-icon="plus"></i></button></div></div>
+    </section>
+    <aside class="panel crew" id="crew"><div class="bar"><h2><i data-icon="users"></i>团队成员</h2><span class="counter">6 人</span><button class="crew-close close" id="crew-close" aria-label="收起成员面板"><i data-icon="close"></i></button></div><div id="team"></div>
+      <div class="crew-foot"><button class="primary" id="dispatch"><i data-icon="plus"></i>分配任务</button><button class="secondary" id="open-slots">协作插槽</button></div>
+    </aside>
+  </div>
+  <div class="lower-panels"><section class="panel desk" id="desk"><div class="bar"><h2><i data-icon="briefcase"></i>总裁任务台</h2><span id="task-count" class="counter">本机私有</span></div><div id="task-list"></div></section>
+  <section class="panel feed" id="activity"><div class="bar"><h2><i data-icon="pulse"></i>工作动态</h2><span class="counter" id="feed-label">本次访问</span></div><div id="events"></div></section></div>
+</main>
+<div class="sheet-mask" id="sheet-mask" hidden></div>
+<div class="mobile-actions"><button id="crew-open" class="secondary" aria-expanded="false" aria-controls="crew"><i data-icon="users"></i>团队成员 · 6</button><button id="mobile-dispatch" class="primary"><i data-icon="plus"></i>分配任务</button></div>
+<dialog aria-labelledby="welcome-title" id="welcome"><img class="welcome-logo" src="/brand.svg" alt="" width="51" height="51"><h2 id="welcome-title">总裁，欢迎回到工作室。</h2><p>六位成员已入驻。先看看办公室，或写下目标，让团队开始工作。</p><label class="check"><input type="checkbox" id="welcome-sound" checked>进入时播放轻音乐</label><button id="enter" class="primary">进入办公室<i data-icon="arrow"></i></button></dialog>
+<dialog aria-labelledby="instructions-title" id="instructions"><div class="dialog-head"><h2 id="instructions-title">员工接入指南</h2><button class="close" aria-label="关闭"><i data-icon="close"></i></button></div><div id="connections"></div><h3>从自己的终端报到</h3><p>在项目目录运行。手动上报只接受预设状态和任务类别。</p><pre><code>python office.py report carbon thinking planning
+python office.py report carbon done planning</code></pre><p>任务台会为每个步骤生成交接文本。可复制到指定员工的会话，再把产出贴回。服务只在本机开放。</p></dialog>
+<dialog aria-labelledby="compose-title" id="compose"><div class="dialog-head"><h2 id="compose-title">分配新任务</h2><button class="close" aria-label="关闭"><i data-icon="close"></i></button></div><form id="new-task">
+<label for="brief">任务目标</label><textarea id="brief" rows="5" required maxlength="4000" autocomplete="off" aria-describedby="dispatch-flow" placeholder="例如：优化办公室 UI，让手机上也能一眼看清团队成员的状态。"></textarea>
+<p class="hint" id="dispatch-flow">Carbon 规划，Astra 选择执行人。工作室开发任务可交给本机 Codex 修改代码并运行测试。派发后使用相应账号的额度，完成后由你验收。</p>
+<div class="form-error" role="status" id="new-error"></div><button class="primary" type="submit">派发并开始<i data-icon="arrow"></i></button></form></dialog>
+<dialog aria-labelledby="task-detail-title" id="task-detail" class="wide"><div class="dialog-head"><h2 id="task-detail-title">任务进度</h2><button class="close" aria-label="关闭"><i data-icon="close"></i></button></div><div id="task-content"></div></dialog>
+<dialog aria-labelledby="release-preview-title" id="release-preview" class="wide release-preview">
+  <div class="dialog-head"><h2 id="release-preview-title">候选版预览</h2><button class="close" aria-label="关闭预览"><i data-icon="close"></i></button></div>
+  <p id="preview-status" role="status">正在打开候选版…</p>
+  <div id="preview-view" hidden></div>
+  <details id="preview-code" hidden><summary>查看文件差异</summary><pre id="preview-diff" tabindex="0" aria-label="文件差异"></pre></details>
+</dialog>
+<dialog aria-labelledby="profile-title" id="profile"><div class="dialog-head"><h2 id="profile-title">成员工位</h2><button class="close" aria-label="关闭"><i data-icon="close"></i></button></div><div id="profile-content"></div><button class="secondary" id="look-desk"><i data-icon="camera"></i> 看工位屏幕</button> <button id="dot-profile" class="secondary" hidden>连接我的 Dot</button></dialog>
+<dialog aria-labelledby="slots-title" id="slots-dialog"><div class="dialog-head"><h2 id="slots-title">协作插槽</h2><button class="close" aria-label="关闭"><i data-icon="close"></i></button></div>
+<p>为同事创建执行席位。他的电脑领取分工，并把成果送回任务台。</p><div id="slot-list"></div>
+<form id="create-slot"><label for="slot-name">新成员名称</label><div class="slot-create"><input id="slot-name" maxlength="24" required placeholder="例如 小林的 Agent"><button class="secondary">创建插槽</button></div></form>
+<div id="slot-secret" hidden><label for="slot-token">此席位的接入令牌 · 仅本次显示</label><input id="slot-token" type="password" readonly autocomplete="off"><button type="button" class="secondary" id="copy-token">复制令牌</button></div>
+<details id="join-help"><summary>同事如何接入</summary><p>下载连接包交给同事，内含本地 Agent 和模型 API 两种配置示例。首次启动连接器时，按提示粘贴该席位的令牌。</p>
+<a class="secondary" href="/join/office-connector.zip" download>下载同事连接包</a><p id="slot-port"></p></details>
+<p id="slot-message" role="status"></p></dialog>
+<dialog aria-labelledby="dot-title" id="dot-dialog"><div class="dialog-head"><h2 id="dot-title">连接我的 Dot</h2><button class="close" aria-label="关闭"><i data-icon="close"></i></button></div>
+<p>在自己的 Dot 会话里发送入驻指令。Dot 可以从连接的电脑领取自己的分工，把会议回复和成果送回任务台。</p>
+<p id="dot-last"></p><textarea id="dot-invitation" readonly rows="4" aria-label="Dot 入驻指令"></textarea><div class="stage-actions"><button class="primary" id="copy-dot">复制入驻指令</button><a class="secondary" href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer" id="dot-link">打开我的 Dot ↗</a></div></dialog>
+<div id="toast" class="toast" role="status" hidden></div>
+</body></html>
