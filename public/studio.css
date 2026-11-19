@@ -61,6 +61,22 @@ main,section[id] {scroll-margin-top:16px}
 .tools button:hover,.close:hover {background:#263859;color:white}
 .tools button[aria-pressed=true] {background:#213e50;color:var(--cyan)}
 .scene {display:flex;flex-direction:column;background:#111b31}
+.scene-task:not([hidden]) {display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;min-height:42px;padding:7px 16px;text-align:left;border-bottom:1px solid var(--soft-line);background:#152039}
+.scene-task:hover {background:#1a2b47}
+.scene-task-prefix {display:inline-flex;align-items:center;gap:7px;color:#93acce;font-size:12px;white-space:nowrap}
+.scene-task[data-tone=active] .signal {background:#72dbf3}
+.scene-task[data-tone=error] .signal {background:var(--warm)}
+#scene-task-title,#scene-task-state {white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#scene-task-title {font-size:13px;font-weight:650}
+#scene-task-state {color:var(--cyan);font-size:12px;max-width:min(31vw,190px)}
+.scene-task[data-tone=error] #scene-task-state {color:var(--warm)}
+.task-flow {grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:4px 0;color:#a2b1ca;font-size:11px;line-height:1.35}
+.task-flow>span {display:inline-flex;align-items:center}
+.task-flow>span+span::before {content:'›';margin:0 8px;color:#7687a4}
+.task-flow [data-state=done] {color:#8cdac7}
+.task-flow [data-state=done]::after {content:'✓';margin-left:3px}
+.task-flow [aria-current=step] {color:#7fe9ff;font-weight:700}
+.task-flow [data-state=error] {color:#ffadbc}
 .viewport {position:relative;isolation:isolate;flex:1;min-height:clamp(435px,39vw,605px);overflow:hidden;
   background-color:#14203c;
   background-image:linear-gradient(90deg,#7896ff0e 1px,transparent 1px),linear-gradient(#7896ff0e 1px,transparent 1px),radial-gradient(ellipse at 49% 61%,#314768 0%,#1f3051 36%,#172440 67%,#121c34 100%);
@@ -96,6 +112,7 @@ main,section[id] {scroll-margin-top:16px}
 .state {margin-left:auto;display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:11px;color:#aebed7}
 .state .signal {background:#798ba9}.state.working,.state.done {color:#83e9b9}.state.working .signal,.state.done .signal {background:#58dd9d}
 .state.thinking {color:#c2b4ff}.state.thinking .signal {background:#a791ff}.state.alert {color:#ffaac0}.state.alert .signal {background:#ff819f}
+.state.waiting {color:#a9dff0}.state.waiting .signal {background:#65c8e7}
 .crew-foot {padding:13px 16px 15px;border-top:1px solid var(--soft-line)}
 .primary {min-height:40px;padding:8px 18px;justify-content:center;gap:8px;border-radius:6px;color:#061522;background:var(--electric);font-size:14px;font-weight:750}
 .primary:hover:not(:disabled) {background:#78f4ff}
@@ -145,6 +162,7 @@ dialog.release-preview {width:min(1180px,calc(100% - 24px))}
   .member-info strong {font-size:13px}.lower-panels {gap:12px}
 }
 @media(max-width:899px) {
+  .scene-task:not([hidden]) {gap:7px;padding-inline:10px}
   .wrap {width:calc(100% - 24px)}.mast-inner {height:50px;gap:10px}.mast nav {margin-left:auto;gap:9px}
   .brand b {font-size:14px}.brand {gap:3px}.brand img {width:27px;height:27px}.mast nav :is(a,button) {font-size:12px;padding:0 2px}.clock {display:none}
   main {padding-bottom:64px}.intro {padding:22px 0 16px;align-items:flex-end;gap:7px}.intro h1 {font-size:29px}.intro p {font-size:12px;max-width:220px;margin-top:6px}

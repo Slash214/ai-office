@@ -38,6 +38,7 @@ STATUSES = {"idle", "coding", "terminal", "browsing", "thinking", "needs_input",
 ACTIVITIES = {"general", "code", "research", "review", "writing", "planning", "media"}
 STALE_SECONDS = 30 * 60
 MAX_BODY = 4096
+WAITING_STATUSES = {"assigned", "queued"}
 
 
 def iso_time(timestamp):
@@ -46,6 +47,14 @@ def iso_time(timestamp):
 
 def as_json(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def workflow_timestamp(event):
+    return datetime.fromisoformat(event["updatedAt"].replace("Z", "+00:00")).timestamp()
+
+
+def underway(status):
+    return status not in ("idle", "done")
 
 
 class PublicAssetVersion:
@@ -169,6 +178,25 @@ class Office:
             self.recent.append(now)
         return 0
 
+    def desktop_summary(self):
+        summary = self.workflow.desktop_summary()
+        if summary["running"]:
+            return summary
+        # Standalone CLI reports have no work-order ID; keep the order counts exact.
+        with self.lock:
+            fresh = [row for row in self.rows.values()
+                     if time.time()-row["timestamp"] < STALE_SECONDS and
+                     row["status"] in ("coding", "thinking", "browsing", "terminal")]
+        if fresh:
+            row = max(fresh,key=lambda r:r["timestamp"])
+            official = self.workflow.board_updates().get(row["id"])
+            if official and workflow_timestamp(official) >= row["timestamp"]:
+                return summary
+            verb = {"coding":"编写代码","thinking":"思考中","browsing":"查阅资料","terminal":"操作终端"}[row["status"]]
+            summary.update(headline=row["id"].capitalize()+" · "+verb,
+                           coding=row["id"]=="codex" and row["status"]=="coding")
+        return summary
+
     def snapshot(self):
         now = time.time()
         updates = self.workflow.board_updates()
@@ -177,21 +205,27 @@ class Office:
             for agent in AGENTS:
                 item = self.rows.get(agent)
                 event = updates.get(agent)
+                active_workflow = False
                 if event:
-                    stamp = datetime.fromisoformat(event["updatedAt"].replace("Z", "+00:00")).timestamp()
-                    if not item or stamp > item["timestamp"]:
+                    stamp = workflow_timestamp(event)
+                    active_report = item and underway(item["status"]) and now - item["timestamp"] < STALE_SECONDS
+                    active_event = underway(event["status"])
+                    if active_event and not (event["status"] in WAITING_STATUSES and active_report):
+                        item = dict(event, timestamp=stamp)
+                        active_workflow = True
+                    elif not active_event and (not item or stamp > item["timestamp"]):
                         item = dict(event, timestamp=stamp)
                 row = dict(id=agent, status="idle", activity="general", collaborator=None, updatedAt=None)
                 if item:
-                    if now - item["timestamp"] < STALE_SECONDS:
+                    if active_workflow or now - item["timestamp"] < STALE_SECONDS:
                         row.update({k: item[k] for k in ("status", "activity", "collaborator")})
                     row["updatedAt"] = iso_time(item["timestamp"])
                 agents.append(row)
         guest_seats = []
         for slot in self.slots.list():
             event = updates.get(slot["id"])
-            recent = event and now - datetime.fromisoformat(event["updatedAt"].replace("Z", "+00:00")).timestamp() < STALE_SECONDS
-            guest_seats.append({"id":slot["id"], "online":slot["online"], "status":event["status"] if recent else "idle"})
+            visible = event and (underway(event["status"]) or now - workflow_timestamp(event) < STALE_SECONDS)
+            guest_seats.append({"id":slot["id"], "online":slot["online"], "status":event["status"] if visible else "idle"})
         return {"agents": agents, "guestSeats":guest_seats, "serverTime": iso_time(now),
                 "assetVersion": self.assets.read()}
 
@@ -304,6 +338,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/status":
             return self.reply(200, self.server.office.snapshot())
+        if path == "/api/desktop":
+            try:
+                self.require_owner()
+                return self.reply(200, self.server.office.desktop_summary())
+            except Problem as exc:
+                return self.reply(exc.code, {"error": str(exc)})
+        if path == "/api/workstation":
+            try:
+                self.require_owner()
+                return self.reply(200, {"codex": self.server.office.workflow.workstation()})
+            except Problem as exc:
+                return self.reply(exc.code, {"error": str(exc)})
         if path == "/api/notifications":
             try:
                 self.require_owner()
@@ -402,7 +448,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(exc.code, {"error": str(exc)})
             except OSError:
                 return self.reply(503, {"error": "无法保存插槽。"})
-        task_action = re.fullmatch(r"/api/tasks/([a-f0-9-]{36})/(step|accept|reject|rollback|stop)", path)
+        task_action = re.fullmatch(r"/api/tasks/([a-f0-9-]{36})/(step|accept|reject|rollback|stop|desktop-txt)", path)
         if path == "/api/tasks" or task_action:
             try:
                 self.require_owner(write=True)
@@ -410,6 +456,10 @@ class Handler(BaseHTTPRequestHandler):
                 workflow = self.server.office.workflow
                 if task_action:
                     task_id, action = task_action.groups()
+                    if action == "desktop-txt":
+                        if data != {}:
+                            raise Problem(400,"桌面交付无需路径参数。")
+                        return self.reply(200, {"task":workflow.export_text(task_id)})
                     if action == "step":
                         return self.reply(200, {"task": workflow.act(task_id, data)})
                     keys = {"accept": {"releaseId"}, "reject": {"releaseId", "feedback"},

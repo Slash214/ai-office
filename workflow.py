@@ -14,6 +14,7 @@ import adapters
 import cancellation
 import project_coder
 import releases
+import desktop_txt
 
 
 NAMES = {
@@ -28,6 +29,16 @@ ROLES = {
     "dot": "个人 Dot 会话。适合总裁点名的沟通或会议，可能需要等待该会话上线",
 }
 STAGES = {"plan": "planning", "review": "reviewing", "approval": "awaiting_approval", "execution": "executing"}
+BOARD_STATES = {
+    "done": ("done", 0),
+    "cancelled": ("idle", 0),
+    "pending": ("assigned", 1),
+    "queued": ("queued", 2),
+    "handoff": ("needs_input", 3),
+    "error": ("error", 3),
+    "running": ("thinking", 4),
+}
+BOARD_ACTIVITIES = {"plan": "planning", "review": "review", "execution": "general"}
 
 
 def now():
@@ -63,6 +74,34 @@ def current(task):
     return next((step for step in open_steps if not (
         step["kind"] == "execution" and step["status"] == "handoff"
     )), open_steps[0] if open_steps else None)
+
+
+def studio_command(tasks):
+    """The owner's dispatch and its current stage, without the private brief."""
+    open_orders = [t for t in tasks if not (t.get("stoppedAt") or t.get("acceptedAt"))]
+    if not open_orders:
+        return None
+    task = max(open_orders, key=lambda t: (t["createdAt"], t["id"]))
+    step = current(task)
+    phase, text, standby = "review", "等待呵呵验收", ""
+    if step:
+        agent, kind, state = step["agent"], step["kind"], step["status"]
+        name = task.get("workerNames", {}).get(agent) or agent.capitalize()
+        role = {"plan":"规划", "review":"分工", "execution":"执行", "approval":"审批"}[kind]
+        claimed = state == "handoff" and step.get("leaseUntil", 0) > time.time()
+        if state == "error":
+            phase, text = "blocked", name + " " + role + "受阻"
+        elif state == "handoff" and not claimed:
+            phase, text = "handoff", "等待 " + name + " 接手"
+        elif state in ("pending", "queued"):
+            phase, text = "dispatch", "等待" + (name if agent != "president" else "呵呵") + role
+        else:
+            phase, text = "working", name + " " + role + "中"
+        text = "已派单 · " + text
+        standby = "等待分工" if kind in ("plan", "review") else "待命支援"
+    elif task.get("textDelivery", {}).get("state") == "error":
+        phase, text = "blocked", "文件交付受阻"
+    return dict(id=task["id"], phase=phase, text=text, standby=standby)
 
 
 def assignment(review, agent):
@@ -110,6 +149,8 @@ def review_routing(text, candidates):
         assignments = {}
         for item in entries:
             agent = item["agent"]
+            if isinstance(agent,str) and agent.startswith("[") and agent.endswith("]"):
+                agent=agent[1:-1]
             if not isinstance(agent, str) or agent not in candidates or agent in assignments:
                 return None
             assignments[agent] = check_text(item["task"], "分工", 2000)
@@ -121,7 +162,7 @@ def review_routing(text, candidates):
 def assign_review(task, step, text):
     candidates = task["routingCandidates"]
     decision = review_routing(text, candidates)
-    needs_coder = engineering_work(task["brief"])
+    needs_coder = not task.get("desktopTxt") and engineering_work(task["brief"])
     if decision and (not needs_coder or "codex" in decision[1]):
         reason, assignments = decision
         source = "astra"
@@ -151,6 +192,26 @@ def assign_review(task, step, text):
     task["steps"].extend(new_step("execute-" + agent, agent, "execution") for agent in assignments)
 
 
+def recover_fallback(task, failed):
+    """Honor a now-readable Astra decision when retrying an undelivered fallback."""
+    if task.get("routingSource")!="fallback" or failed["kind"]!="execution" or failed["status"]!="error":
+        return failed
+    execution=[s for s in task["steps"] if s["kind"]=="execution"]
+    if len(execution)!=1 or task.get("release") or task.get("revisionBase"):
+        return failed
+    review=next((s for s in reversed(task["steps"]) if s["kind"]=="review" and s["status"]=="done"),None)
+    if not review:
+        return failed
+    decision=review_routing(review["result"],task["routingCandidates"])
+    if not decision or (engineering_work(task["brief"]) and not task.get("desktopTxt") and "codex" not in decision[1]):
+        return failed
+    task["steps"].remove(failed)
+    task["actionLog"]=(task.get("actionLog",[])+[{"at":now(),"message":
+        f"{failed['agent']} 的后备执行未交付：{failed['error']} 重试按原 Astra 分工继续。"}])[-12:]
+    assign_review(task,review,review["result"])
+    return current(task)
+
+
 def prompt_for(task, step):
     names = {**NAMES, **task.get("workerNames", {})}
     worker_names = "、".join(f"{names[a]} [{a}]" for a in task["workers"])
@@ -161,6 +222,12 @@ def prompt_for(task, step):
     if step["kind"] == "approval":
         return "请总裁查看 Carbon 方案及 Astra 审核分工，确认后将任务派给所选团队。"
     header = f"你是 {names[step['agent']]}。请用中文直接交付本阶段的文本成果。\n\n总裁任务：\n{task['brief']}"
+    if task.get("desktopHtml"):
+        header += ("\n这是独立的桌面 HTML 文件。工作室宿主会原子保存最终执行成员回复中的 HTML。"
+                   "请规划、分配一个能离线打开的单文件页面，最后一位执行成员须直接交付从 <!doctype html> 到 </html> 的完整源码，"
+                   "使用内嵌 CSS、系统字体，避免外部服务与依赖，无需改动工作室工程。")
+    if task.get("desktopTxt"):
+        header += "\n工作室宿主负责桌面 TXT 写入。请指定一位文本员工整合定稿。最终交付第一行写“文件名：作品名.txt”，从第二行起只写完整正文。"
     if step["id"] == "plan":
         return header + f"\n\n负责规划。提出可执行的步骤、所需输入与验收标准。可用执行成员：{worker_names}。"
     results = {item["id"]: item["result"] for item in task["steps"]}
@@ -177,7 +244,8 @@ def prompt_for(task, step):
                         if step["id"] == "review" else
                         "这是最终复核。对常规取舍直接作决定，在分工中交代尚需验证的事项。")
             return header + "\n\n你代表总裁安排执行。选完成交付所需的最少成员，给每人一份具体、可验收的工作。" + (
-                "工作室 UI、代码、集成或实际跑测试的任务由 codex 操作项目。文本建议和文案可由 argon 或 hydrogen 执行。"
+                "工作室 UI、代码、集成或实际跑测试的任务由 codex 操作工作室项目。Codex 的修改范围是该项目。"
+                "文本建议和文案可由 argon 或 hydrogen 交付正文和建议文件名。"
                 "总裁点名与个人 Dot 沟通时交给 dot。不要代替执行者声称已经完成。\n候选成员：\n" + worker_names +
                 "\n" + revision + '\n正常分工只返回一个 JSON 对象。reason 填写审核与选择理由，assignments 数组中的每项'
                 '包含候选成员的准确标识 agent 和具体交付内容 task。格式为 {"reason":"实际选择理由","assignments":[{"agent":"成员标识","task":"具体分工与验收标准"}]}。'
@@ -197,12 +265,29 @@ def prompt_for(task, step):
     assigned = task.get("assignments", {}).get(step["agent"]) or assignment(review, step["agent"])
     responsibility = f"\n你的具体任务：\n{assigned}" if assigned else f"\n请按审核中对 {names[step['agent']]} 的分工交付。"
     latest = step.get("feedback", "")
-    return (header + responsibility + "\n直接给出可供总裁使用的成果。明确仍需外部资料或环境才能验证的部分。"
+    handoff = []
+    budget = min(16000, max(0, 62000 - len(header) - len(responsibility) - len(latest)))
+    for previous in reversed(task["steps"][:task["steps"].index(step)]):
+        if previous["kind"] != "execution" or previous["status"] != "done" or not previous["result"]:
+            continue
+        label = f"{names[previous['agent']]} 的实际交付\n"
+        if budget <= len(label):
+            break
+        text = (label + previous["result"])[:budget]
+        handoff.append(text)
+        budget -= len(text) + 2
+    upstream = "\n\n前序执行成员的交付：\n" + "\n\n".join(reversed(handoff)) if handoff else ""
+    return (header + upstream + responsibility + "\n直接给出可供总裁使用的成果。明确仍需外部资料或环境才能验证的部分。"
             + ("\n\n总裁补充的最新交付要求（更新上方旧要求）：\n" + latest if latest else ""))
 
 
 def render(task):
     result = copy.deepcopy(task)
+    result["canExportDesktopTxt"] = bool(not task.get("desktopTxt") and not task.get("acceptedAt")
+            and task.get("release",{}).get("state")=="staged"
+            and sum(c["path"].lower().endswith(".txt") and c["kind"]!="deleted"
+                    for c in task["release"]["changes"])==1
+            and desktop_txt.requested(task["brief"]) and not engineering_work(task["brief"]))
     step = current(result)
     result["status"] = "stopped" if task.get("stoppedAt") else STAGES[step["kind"]] if step else "complete"
     if step and step["status"] in ("queued", "handoff"):
@@ -230,6 +315,7 @@ class Workflow:
         self.instance_id = uuid.uuid4().hex
         self.version = 0
         self.busy = None
+        self.coder_screen = None
         self.stop_event = None
         for path in self.directory.glob("*.json"):
             task = json.loads(path.read_text(encoding="utf-8"))
@@ -254,6 +340,8 @@ class Workflow:
             self.schedule_next()
 
     def save(self, task):
+        if (task.get("desktopTxt") or task.get("desktopHtml")) and not task.get("textDelivery") and not task.get("stoppedAt") and not current(task):
+            self.write_text_delivery(task)
         task["updatedAt"] = now()
         fd, filename = tempfile.mkstemp(prefix="task-", suffix=".tmp", dir=self.directory)
         try:
@@ -267,6 +355,41 @@ class Workflow:
                 os.unlink(filename)
         self.tasks[task["id"]] = task
         self.version += 1
+
+    def write_text_delivery(self, task):
+        try:
+            if task.get("desktopHtml"):
+                writer=next(s for s in reversed(task["steps"]) if s["kind"]=="execution")
+                data=desktop_txt.html_document(writer["result"])
+                task["textDelivery"]=desktop_txt.write("工作室展示_"+task["id"][:8],data,suffix=".html")
+                return
+            source=task.get("textSourceRelease") or (task.get("release") or {}).get("id")
+            if source:
+                name,data=releases.text_output(self.root,source,data_dir=self.data_dir)
+            else:
+                writer=next((s for s in reversed(task["steps"]) if s["kind"]=="execution"
+                             and s["agent"]!="codex" and s["status"]=="done" and s["result"]),None)
+                if not writer:
+                    raise ValueError("没有已交付的文本正文")
+                name,text=desktop_txt.split_result(writer["result"],"工作室交付_"+task["id"][:8])
+                data=text.encode("utf-8")
+            task["textDelivery"]=desktop_txt.write(name,data)
+        except (OSError, ValueError, RuntimeError) as exc:
+            task["textDelivery"]={"state":"error","error":str(exc)[:480]}
+
+    def export_text(self, task_id):
+        with self.lock:
+            task=copy.deepcopy(self.owner_task(task_id))
+            if current(task) or task.get("stoppedAt") or not (task.get("desktopHtml") or task.get("desktopTxt") or
+                    (desktop_txt.requested(task["brief"]) and not engineering_work(task["brief"]))):
+                raise Problem(409,"此工单尚无可交付的桌面 TXT。")
+            if not task.get("desktopHtml"):
+                task["desktopTxt"]=True
+            self.write_text_delivery(task)
+            if task["textDelivery"]["state"]=="saved" and task.get("release",{}).get("state")=="staged":
+                task["textSourceRelease"]=task.pop("release")["id"]
+            self.save(task)
+            return render(task)
 
     def all(self):
         return self.list_if_changed(None)[1]
@@ -285,10 +408,17 @@ class Workflow:
             if task.get("stoppedAt") or current(task) is not None:
                 raise Problem(409, "团队仍在处理，所有执行成员交付后可验收。")
             self.check_release(task, release_id)
+            if (task.get("desktopTxt") or task.get("desktopHtml")) and task.get("textDelivery",{}).get("state")!="saved":
+                raise Problem(409,"请先将文件保存到桌面，再验收。")
             if not task.get("acceptedAt"):
                 task = copy.deepcopy(task)
                 if task.get("release"):
-                    task["release"] = self.release_operation(releases.publish, task["release"]["id"])
+                    try:
+                        task["release"] = self.release_operation(releases.publish, task["release"]["id"])
+                    except Problem as exc:
+                        task["actionLog"]=(task.get("actionLog",[])+[{"at":now(),"message":str(exc)}])[-12:]
+                        self.save(task)
+                        raise Problem(exc.code,"暂未发布，请查看运行日志。") from exc
                 task["acceptedAt"] = now()
                 self.save(task)
             return render(task)
@@ -353,7 +483,14 @@ class Workflow:
             if not execution:
                 raise Problem(409, "没有可返工的执行步骤。")
             candidate = task.pop("release", None)
+            if task.get("desktopTxt") or task.get("desktopHtml"):
+                task.pop("textDelivery",None)
+                task.pop("textSourceRelease",None)
             step = next((step for step in execution if step["agent"] == "codex"), execution[-1])
+            if task.get("desktopHtml"):
+                step=execution[-1]
+            if task.get("desktopTxt"):
+                step=next((s for s in reversed(execution) if s["agent"]!="codex"),step)
             if candidate:
                 info = self.release_operation(releases.inspect, candidate["id"])
                 if info["state"] != "staged":
@@ -411,7 +548,7 @@ class Workflow:
                     continue
                 step = current(task)
                 if step is None:
-                    kind = "review"
+                    kind = "failed" if task.get("textDelivery",{}).get("state")=="error" else "review"
                 elif step["status"] == "error":
                     kind = "failed"
                 elif step["status"] == "handoff" and step["agent"] not in task.get("workerNames", {}):
@@ -424,27 +561,99 @@ class Workflow:
                 events.append((stamp, {"id": key, "taskId": task["id"], "kind": kind}))
             return [event for _, event in sorted(events, key=lambda item: (item[0], item[1]["id"]), reverse=True)[:50]]
 
+    def desktop_summary(self):
+        """A bounded owner view for the pet and the two wall displays."""
+        with self.lock:
+            self.expire_slot_leases()
+            screen = self.workstation() or {}
+            focus, reviews, recent, handoffs = [], [], [], []
+            queued = running = 0
+            actions = {"plan": "规划任务", "review": "审核分工", "execution": "执行任务", "approval": "审批派发"}
+            phases = {"running":"进行中", "queued":"已排队", "done":"已交付", "error":"遇到问题",
+                      "handoff":"等待交接", "cancelled":"已停止"}
+            for task in self.tasks.values():
+                recent.append((task["createdAt"], "呵呵大王 · 分配任务"))
+                if not current(task) and not (task.get("stoppedAt") or task.get("acceptedAt")) and task.get("textDelivery",{}).get("state")!="error":
+                    reviews.append((task["updatedAt"], task["id"]))
+                for field,label in (("acceptedAt","验收通过"),("rolledBackAt","已回退"),("stoppedAt","停止任务")):
+                    if task.get(field):
+                        recent.append((task[field],"呵呵大王 · "+label))
+                for index,step in enumerate(task["steps"]):
+                    state, agent = step["status"], step["agent"]
+                    name = task.get("workerNames", {}).get(agent) or {
+                        "president":"呵呵大王", "codex":"Codex", "dot":"Dot",
+                    }.get(agent, agent.capitalize())
+                    action = actions[step["kind"]]
+                    if state in phases and step["updatedAt"]:
+                        recent.append((step["updatedAt"], name + " · " + action + " · " + phases[state]))
+                    if task.get("stoppedAt") or state not in ("running","queued","handoff","error"):
+                        continue
+                    coding = False
+                    if state == "running":
+                        running += 1
+                        if index:
+                            previous = task["steps"][index-1]
+                            if previous["status"] == "done" and previous["agent"] != agent and previous["updatedAt"]:
+                                start = datetime.fromisoformat(step["updatedAt"].replace("Z","+00:00"))
+                                end = datetime.fromisoformat(previous["updatedAt"].replace("Z","+00:00"))
+                                if 0 <= (start-end).total_seconds() < 2 and 0 <= time.time()-start.timestamp() < 12:
+                                    handoffs.append((step["updatedAt"], previous["agent"], agent))
+                        if agent == "codex":
+                            phase = screen.get("stage") if (self.coder_screen or {}).get("task") == task["id"] else None
+                            action = {"planning":"分析工程", "reading":"读取源码", "edited":"写入候选代码",
+                                      "testing":"运行测试"}.get(phase, "开发中")
+                            coding = phase != "testing"
+                        priority = 4
+                    elif state == "queued":
+                        queued += 1
+                        priority, action = 2, "已排队"
+                    elif state == "handoff" and step.get("lease") and step.get("leaseUntil",0)>time.time():
+                        running += 1
+                        priority, action = 4, "执行任务"
+                    else:
+                        priority, action = 1, phases[state]
+                    focus.append((priority, step["updatedAt"] or "", name + " · " + action, coding))
+            active = max(focus, default=(0, "", "团队待命", False))
+            handoff = max(handoffs) if handoffs else None
+            return dict(command=studio_command(self.tasks.values()), headline=active[2], coding=active[3], running=running, queued=queued,
+                        handoff=dict(at=handoff[0], sender=handoff[1], receiver=handoff[2]) if handoff else None,
+                        reviews=len(reviews), reviewId=max(reviews)[1] if reviews else None,
+                        recent=[dict(at=stamp, text=label) for stamp,label in sorted(recent, reverse=True)[:3]])
+
     def board_updates(self):
         rows = {}
+        priorities = {}
+        timestamp = time.time()
         with self.lock:
             for task in self.tasks.values():
                 for step in task["steps"]:
-                    stamp = step["updatedAt"]
-                    agent = step["agent"]
-                    if (agent not in NAMES and agent not in task.get("workerNames", {})) or not stamp or (agent in rows and stamp <= rows[agent]["updatedAt"]):
+                    agent, phase = step["agent"], step["status"]
+                    guest = agent in task.get("workerNames", {})
+                    if (agent not in NAMES and not guest) or phase not in BOARD_STATES:
                         continue
-                    status = {"running": "thinking", "done": "done", "error": "error", "handoff": "needs_input",
-                              "cancelled": "idle"}.get(step["status"])
-                    if agent in task.get("workerNames", {}) and step["status"] == "handoff":
-                        status = "thinking" if step.get("lease") else "idle"
-                    if status:
-                        activity = {"plan": "planning", "review": "review", "execution": "general"}[step["kind"]]
-                        peer = {"review": "carbon", "revision": "astra", "final-review": "carbon"}.get(step["id"]) if status == "thinking" else None
-                        if agent == "codex":
-                            activity = "code"
-                            if status == "thinking":
-                                status = "coding"
-                        rows[agent] = dict(id=agent, status=status, updatedAt=stamp, activity=activity, collaborator=peer)
+                    # Pending steps name actual participants. Routing candidates remain private
+                    # until the reviewer puts them into the workflow's step list.
+                    stamp = step["updatedAt"] or (task["updatedAt"] if phase == "pending" else None)
+                    if not stamp or (task.get("stoppedAt") and phase not in ("done", "cancelled")):
+                        continue
+                    status, priority = BOARD_STATES[phase]
+                    if guest and phase == "handoff":
+                        status = "queued"
+                        if step.get("lease"):
+                            status = "error" if step["leaseUntil"] <= timestamp else "thinking"
+                            priority = BOARD_STATES["error" if status == "error" else "running"][1]
+                    rank = (priority, stamp)
+                    if agent in priorities and rank <= priorities[agent]:
+                        continue
+                    priorities[agent] = rank
+                    activity = "code" if agent == "codex" else BOARD_ACTIVITIES[step["kind"]]
+                    if activity == "general":
+                        assignment_text = task.get("assignments", {}).get(agent) or task["brief"]
+                        if re.search(r"撰写|起草|润色|翻译|文案|剧本|稿件|\bdraft\b|\bcopywriting\b", assignment_text, re.I):
+                            activity = "writing"
+                    if agent == "codex" and status == "thinking":
+                        status = "coding"
+                    rows[agent] = dict(id=agent, status=status, updatedAt=stamp, activity=activity, collaborator=None)
         return rows
 
     def schedule_next(self):
@@ -462,10 +671,13 @@ class Workflow:
         self.schedule_next()
 
     def create(self, data):
-        if type(data) is not dict or data.keys() - {"brief", "workers", "autoAdvance", "requestId"}:
+        if type(data) is not dict or data.keys() - {"brief", "workers", "autoAdvance", "requestId","desktopTxt"}:
             raise Problem(400, "任务字段无效。")
         brief = check_text(data.get("brief"), "任务", 6000)
         auto_route = "workers" not in data
+        txt=data.get("desktopTxt",auto_route and desktop_txt.requested(brief) and not engineering_work(brief))
+        if type(txt) is not bool:
+            raise Problem(400,"无效的交付格式。")
         workers = data.get("workers", [])
         if not auto_route and (not isinstance(workers, list) or not 1 <= len(workers) <= len(WORKERS) + 12
                                or not all(isinstance(w, str) for w in workers) or len(set(workers)) != len(workers)):
@@ -481,10 +693,12 @@ class Workflow:
         steps = [new_step("plan", "carbon", "plan"), new_step("review", "astra", "review")]
         steps.extend(new_step("execute-" + a, a, "execution") for a in workers)
         task = dict(id=task_id, createdAt=now(), brief=brief, workers=workers, autoAdvance=True, steps=steps)
+        if txt:
+            task["desktopTxt"]=True
         with self.lock:
             existing = self.tasks.get(task_id)
             if existing:
-                if (existing["brief"] != brief or (existing.get("routingMode") == "auto") != auto_route
+                if (existing["brief"] != brief or bool(existing.get("desktopTxt")) != txt or (existing.get("routingMode") == "auto") != auto_route
                         or (not auto_route and existing["workers"] != workers)):
                     raise Problem(409, "任务标识已用于另一份简报。")
                 return render(existing)
@@ -494,8 +708,43 @@ class Workflow:
             task["workerNames"] = {w:external[w] for w in workers if w in external}
             if auto_route:
                 task.update(routingMode="auto", routingCandidates=candidate_workers(brief, self.slots))
+                if txt:
+                    task["routingCandidates"].pop("codex",None)
             self.enqueue(task)
             return render(task)
+
+    def record_coder_screen(self, task_id, step_id, stage, fields):
+        with self.lock:
+            task = self.tasks.get(task_id)
+            step = current(task) if task else None
+            if not step or step["id"] != step_id or step["agent"] != "codex" or step["status"] != "running":
+                return
+            old = self.coder_screen or {}
+            screen = dict(old) if old.get("task") == task_id and old.get("attempt") == step["updatedAt"] else {}
+            screen.update(task=task_id, step=step_id, attempt=step["updatedAt"], stage=stage, **fields)
+            self.coder_screen = screen
+
+    def workstation(self):
+        with self.lock:
+            screen = self.coder_screen
+            if not screen:
+                return None
+            task = self.tasks.get(screen["task"])
+            step = next((s for s in task["steps"] if s["id"] == screen["step"]), None) if task else None
+            if not step or task.get("stoppedAt"):
+                return None
+            stage = screen["stage"]
+            if step["status"] == "running":
+                if step["updatedAt"] != screen["attempt"]:
+                    return None
+            elif step["status"] in ("done", "error"):
+                ended = datetime.fromisoformat(step["updatedAt"].replace("Z", "+00:00")).timestamp()
+                if time.time() - ended > 120:
+                    return None
+                stage = "delivered" if step["status"] == "done" else "error"
+            else:
+                return None
+            return dict(stage=stage, path=screen.get("path", ""), lines=screen.get("lines", []))
 
     def start(self, task):
         step = current(task)
@@ -507,6 +756,11 @@ class Workflow:
 
     def finish(self, task, text):
         completed = current(task)
+        if task.get("desktopHtml") and completed["kind"]=="execution" and completed is task["steps"][-1]:
+            try:
+                desktop_txt.html_document(text)
+            except ValueError as exc:
+                raise Problem(422,str(exc)) from exc
         completed.update(status="done", error="", result=text, updatedAt=now())
         if text.splitlines()[0].strip().casefold() == "[revise]":
             if completed["id"] == "review":
@@ -536,17 +790,29 @@ class Workflow:
                 try:
                     with cancellation.capture(stop_event):
                         capabilities = adapters.capabilities()
+                        if step["id"]=="plan" and not task.get("desktopTxt") and desktop_txt.requested_html(task["brief"]):
+                            task["desktopHtml"]=True
                         if task.get("routingMode") == "auto" and step["kind"] in ("plan", "review"):
                             task["routingCandidates"] = candidate_workers(task["brief"], self.slots, capabilities)
+                            if task.get("desktopTxt"):
+                                task["routingCandidates"].pop("codex",None)
                         cap = ({"ready": False, "detail": "等待同事的连接器领取任务。"}
                                if agent in task.get("workerNames", {}) else capabilities.get(agent, {}))
                         if cap.get("ready"):
-                            with project_coder.for_review(self.data_dir, task.get("revisionBase")):
-                                output = adapters.run_agent(agent, prompt_for(task, step))
+                            def on_progress(stage, fields):
+                                self.record_coder_screen(task_id, step["id"], stage, fields)
+                            if agent == "codex":
+                                on_progress("planning", {"path": "", "lines": []})
+                            with project_coder.for_review(self.data_dir, task.get("revisionBase"), on_progress):
+                                if agent=="codex" and task.get("desktopHtml"):
+                                    output=adapters.run_agent(agent, prompt_for(task, step), standalone=True)
+                                else:
+                                    output = adapters.run_agent(agent, prompt_for(task, step))
                             if isinstance(output, project_coder.CodeDelivery):
                                 candidate = output.release
                                 output = output.text
-                            self.finish(task, check_text(output, "模型结果", 16000))
+                            limit = 128000 if task.get("desktopHtml") and step["kind"]=="execution" else 16000
+                            self.finish(task, check_text(output, "模型结果", limit))
                             if agent == "codex" and step["status"] == "done":
                                 replaced = task.pop("revisionBase", None)
                                 if candidate:
@@ -690,6 +956,8 @@ class Workflow:
             elif action == "manual":
                 self.finish(task, check_text(data.get("result"), "人工交回结果", 16000))
             elif action in ("run", "retry"):
+                if action=="retry" and not (data.get("feedback") or data.get("fresh")):
+                    step=recover_fallback(task,step)
                 abandoned = task.pop("revisionBase", None) if data.get("fresh") else None
                 step.update(status="pending")
                 self.enqueue(task)

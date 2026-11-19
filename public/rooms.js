@@ -1,3 +1,4 @@
+import {drawTaskBoard} from './monitor.js';
 // Furnished wings of the cutaway. All anchor positions are in world space.
 export function buildRooms({parent, animated, box, cyl, group, rod, mesh, globe, textureSurface, luminous, floorPad}) {
   const anchors = {
@@ -84,20 +85,8 @@ export function buildRooms({parent, animated, box, cyl, group, rod, mesh, globe,
     box(board,dx,.13,0,.20,.105,.71,ink);
   }
   box(board,0,1.87,0,3.52,1.92,.18,'#5c8690');
-  textureSurface(board,0,1.87,.096,3.37,1.75,(c,w,h)=>{
-    c.fillStyle='#c2d7c8';c.fillRect(0,0,w,h);
-    c.fillStyle='#466b6c';c.font='bold 22px sans-serif';c.fillText('RESEARCH BOARD',23,35);
-    c.fillStyle='#648c83';c.fillRect(22,46,w-44,3);
-    c.strokeStyle='#557e79';c.lineWidth=4;c.beginPath();
-    c.moveTo(128,113);c.lineTo(194,113);c.lineTo(220,172);c.lineTo(290,172);c.lineTo(324,107);c.lineTo(396,107);c.stroke();
-    [[57,76,76,68,'#f1bf74'],[209,141,78,63,'#e69f9f'],[343,71,70,67,'#a18db8']].forEach(([x,y,ww,hh,color])=>{
-      c.fillStyle='#829e92';c.fillRect(x+4,y+4,ww,hh);c.fillStyle=color;c.fillRect(x,y,ww,hh);
-      c.fillStyle='#506366';c.fillRect(x+10,y+15,ww*.62,4);c.fillRect(x+10,y+26,ww*.42,4);
-    });
-    c.strokeStyle='#75988e';c.lineWidth=2;c.strokeRect(453,79,104,137);
-    for(let i=0;i<4;i++){c.fillStyle=['#557877','#609d8b','#79af91','#e5ad6d'][i];c.fillRect(468+i*22,184-i*18,11,21+i*18);}
-    c.fillStyle='#5d857f';c.fillRect(37,246,373,3);c.fillRect(37,257,237,3);
-  });
+  const workBoard=textureSurface(board,0,1.87,.096,3.37,1.75,
+    (c,w,h)=>drawTaskBoard(c,w,h,null,true,'等待读取'));
   box(board,0,.88,.13,3.53,.08,.32,'#91aaa4');
   box(board,.78,.952,.18,.39,.045,.064,'#7ed9bb');
   box(board,1.19,.952,.18,.23,.055,.10,ink);
@@ -260,5 +249,5 @@ export function buildRooms({parent, animated, box, cyl, group, rod, mesh, globe,
       });
     }
   }
-  return {anchors,update};
+  return {anchors,update,updateBoard(data,hint){workBoard.refresh((c,w,h)=>drawTaskBoard(c,w,h,data,true,hint));}};
 }

@@ -1,5 +1,6 @@
 import {mountOffice} from './scene.js';
 import {daylight, updateMarket} from './office-environment.js';
+import {readWorkstation,readDesktopSummary} from './monitor.js';
 
 const status = document.querySelector('#wall-status');
 try {
@@ -31,15 +32,20 @@ try {
         pendingVersion = assetVersion !== loadedVersion ? assetVersion : null;
       }
       scene.setState(agents);
+      const [edit,summary]=await Promise.all([readWorkstation(agents),readDesktopSummary()]);
+      scene.setSummary(summary);
+      scene.setCodexEdit(edit);
       scene.setGuests(guestSeats || []);
       status.hidden = true;
     } catch {
+      scene.setState([]);scene.setGuests([]);scene.setSummary(null,'服务离线');
+      scene.setCodexEdit(null);
       status.textContent = '办公室离线 · 正在重连';
       status.hidden = false;
     } finally { polling = false; }
   }
   update();
-  const pollTimer=setInterval(update, 6000);
+  const pollTimer=setInterval(update, 3000);
   document.addEventListener('visibilitychange', update);
   window.addEventListener('pagehide', event=>{
     if (event.persisted) return;

@@ -90,3 +90,22 @@ test('reduced motion keeps ambient activity still and still responds to real sta
   setState('idle');
   assert.ok(frames(0,opts).every(row=>row.seated&&row.pose==='idle'&&distance(row,homes[row.id])<1e-6));
 });
+
+test('waiting members acknowledge assignments at their desks and then start their actual roles',()=>{
+  const life=createOfficeLife({homes,locations});
+  const phase={reducedMotion:true};
+  life.setState([
+    {id:'carbon',status:'thinking',activity:'planning',updatedAt:'2000-01-01T00:00:00Z'},
+    {id:'astra',status:'assigned',activity:'review'},
+    {id:'hydrogen',status:'queued',activity:'writing'},
+  ]);
+  const rows=Object.fromEntries(life.tick(dt,phase).map(row=>[row.id,row]));
+  assert.equal(rows.carbon.caption,'规划任务');
+  assert.equal(rows.astra.caption,'等待接力');
+  assert.equal(rows.hydrogen.caption,'已接单排队');
+  assert.ok(['carbon','astra','hydrogen'].every(id=>rows[id].seated&&distance(rows[id],homes[id])<1e-6));
+  life.setState([{id:'hydrogen',status:'thinking',activity:'writing'}]);
+  const next=life.tick(dt,phase).find(row=>row.id==='hydrogen');
+  assert.equal(next.pose,'type');
+  assert.equal(next.caption,'撰写文稿');
+});

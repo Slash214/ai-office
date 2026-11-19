@@ -1,4 +1,5 @@
 # Rebuild the x64 office launcher on Windows with the .NET Framework compiler.
+param([string]$OutputPath)
 $ErrorActionPreference = 'Stop'
 
 function Get-OfficeStreamSha256([System.IO.Stream] $Stream) {
@@ -50,8 +51,8 @@ try {
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 # Express the Unicode output name as code points for legacy Windows PowerShell.
 $name = 'AI' + [char]0x5de5 + [char]0x4f5c + [char]0x5ba4 + '.exe'
-$output = Join-Path $root $name
+$output = if ($OutputPath) { $OutputPath } else { Join-Path $root $name }
 $sources = Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' | ForEach-Object FullName
-& $csc /nologo /optimize+ /platform:x64 /target:winexe /codepage:65001 "/out:$output" "/win32icon:$PSScriptRoot\office.ico" "/win32manifest:$PSScriptRoot\office.manifest" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll "/reference:$runtime\Microsoft.Web.WebView2.Core.dll" "/reference:$runtime\Microsoft.Web.WebView2.WinForms.dll" $sources
+& $csc /nologo /optimize+ /platform:x64 /target:winexe /codepage:65001 "/out:$output" "/resource:$PSScriptRoot\pet-idle.png,pet-idle.png" "/resource:$PSScriptRoot\pet-coding.png,pet-coding.png" "/win32icon:$PSScriptRoot\office.ico" "/win32manifest:$PSScriptRoot\office.manifest" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll "/reference:$runtime\Microsoft.Web.WebView2.Core.dll" "/reference:$runtime\Microsoft.Web.WebView2.WinForms.dll" $sources
 if ($LASTEXITCODE) { throw "C# compilation failed ($LASTEXITCODE)." }
 Get-Item -LiteralPath $output

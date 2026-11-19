@@ -39,6 +39,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
             data = {
                 "api/status": {"agents": [], "guestSeats": [], "assetVersion": preview.release_id},
                 "api/tasks": {"tasks": []},
+                "api/workstation": {"codex": None},
+                "api/desktop": {"headline":"候选版预览","running":0,"queued":0,"reviews":0,"recent":[]},
                 "api/capabilities": {"agents": {}},
                 "api/slots": {"slots": [], "workerPort": None},
             }.get(path)

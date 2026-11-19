@@ -153,6 +153,16 @@ class ProjectCoding(unittest.TestCase):
                     {"path":"public/office.css","before":wrong,"after":"invalid"}])
         self.assertEqual(self.css.read_bytes(),original)
 
+    def test_monitor_samples_successful_edits_only(self):
+        events = []
+        with coder.for_review(self.root, on_progress=lambda stage, fields: events.append((stage, fields))):
+            with self.assertRaises(ValueError):
+                coder.apply_edits(self.root,[{"path":"public/office.css","before":"unknown","after":"bad"}])
+            self.assertEqual(events, [])
+            coder.apply_edits(self.root,[{"path":"public/office.css","before":"body{}","after":"body{}\nmain{}\napi_key = 'private'"}])
+        self.assertEqual(events,[("edited",{"path":"public/office.css","lines":["+ main{}", "+ •••"]})])
+        self.assertEqual(coder.changed_excerpt("one\ntwo\nthree","one\nthree"),["− two"])
+
     def test_named_module_includes_its_verified_digest_and_small_importer(self):
         target=self.root/"public"/"face.js"
         target.write_bytes(b"export const face = 1;\r\n")

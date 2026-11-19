@@ -1,7 +1,7 @@
 import * as THREE from './vendor/three.module.js';
 import {buildRooms} from './rooms.js';
 import {createOfficeLife} from './life.js';
-import {drawMonitor} from './monitor.js';
+import {drawMonitor,drawTaskBoard,workLabel,editStages} from './monitor.js';
 import {crewDesign} from './crew-design.js';
 
 const ROSTER = [
@@ -42,6 +42,7 @@ export function mountOffice(container, {wallpaper = false} = {}) {
   if (renderer) {
     renderer.setClearColor(0x000000,0);
     renderer.shadowMap.enabled = true;
+    renderer.shadowMap.autoUpdate = !wallpaper;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
   }
@@ -133,7 +134,7 @@ export function mountOffice(container, {wallpaper = false} = {}) {
   const sun=new THREE.DirectionalLight('#ccddff',2.05);
   sun.position.set(-5,16,11);sun.castShadow=true;
   Object.assign(sun.shadow.camera,{left:-15,right:15,top:15,bottom:-15,near:1,far:48});
-  const shadowResolution=wallpaper?1024:2048;
+  const shadowResolution=wallpaper?512:2048;
   sun.shadow.mapSize.set(shadowResolution,shadowResolution);
   sun.shadow.normalBias=.035;sun.shadow.bias=-.00022;
   const fill=new THREE.DirectionalLight('#bea5fb',.88);fill.position.set(12,7,-5);
@@ -270,17 +271,9 @@ export function mountOffice(container, {wallpaper = false} = {}) {
   // One telemetry surface on the planning side and an articulated market display in the meeting bay.
   const planningWall=group(fixtures,-2.53,2.72,-6.81);
   box(planningWall,0,0,0,3.26,1.80,.17,PALETTE.dark);
-  textureSurface(planningWall,0,0,.091,3.07,1.62,(c,w,h)=>{
-    const panel=c.createLinearGradient(0,0,w,h);panel.addColorStop(0,'#163e56');panel.addColorStop(.58,'#222c50');panel.addColorStop(1,'#513766');
-    c.fillStyle=panel;c.fillRect(0,0,w,h);
-    c.strokeStyle='#294871';c.lineWidth=2;
-    for(let i=1;i<10;i++){c.beginPath();c.moveTo(i*w/10,0);c.lineTo(i*w/10,h);c.stroke();}
-    for(let i=1;i<6;i++){c.beginPath();c.moveTo(0,i*h/6);c.lineTo(w,i*h/6);c.stroke();}
-    const nodes=[[.13,.69],[.34,.40],[.57,.65],[.76,.30],[.89,.53]];
-    c.strokeStyle='#75d9ee';c.lineWidth=4;c.beginPath();nodes.forEach(([x,y],i)=>i?c.lineTo(x*w,y*h):c.moveTo(x*w,y*h));c.stroke();
-    nodes.forEach(([x,y],i)=>{c.fillStyle=['#71f3d2','#e197ff','#77bbff','#ffca80','#ff9eb9'][i];c.beginPath();c.arc(x*w,y*h,8,0,TAU);c.fill();});
-    c.fillStyle='#c9e9ff';c.font='bold 27px monospace';c.fillText('SYSTEM MAP',22,40);
-  });
+  let summary=null,summaryKey='',boardHint='等待读取';
+  const teamDisplay=textureSurface(planningWall,0,0,.091,3.07,1.62,
+    (c,w,h)=>drawTaskBoard(c,w,h,null,false,boardHint));
   for(let i=0;i<22;i++){
     const tint=i<6?'#6465a3':i<14?'#8d649d':'#ab739b';
     box(fixtures,.52+i*.29,2.05,-6.81,.105,3.80,.11,i%4===0?tint:'#58476b');
@@ -389,6 +382,7 @@ export function mountOffice(container, {wallpaper = false} = {}) {
   orbitArc(meeting,.40,.62,.2,dimIce);orbitArc(meeting,.45,-.85,.3,iris);
   mesh(meeting,globe,'#738ac0',.20,1.70,0,.18,.18,.18);
   const stationScreens=new Map();
+  let codexEdit=null,editSignature='';
   function computer(d,person) {
     box(d,-.36,1.26,-.02,.54,.065,.40,PALETTE.steel);
     box(d,-.36,1.49,-.12,.10,.50,.10,PALETTE.steel);
@@ -956,7 +950,15 @@ export function mountOffice(container, {wallpaper = false} = {}) {
     for(const y of [-.045,.002,.045])box(tablet,-.039,y,.04,.225,.016,.017,luminous('#d8eeff'));
     mug.visible=tablet.visible=false;
     // Tiny face, fabric and emblem details still receive the body's shadow.
-    if(renderer)root.traverse(node=>{if(node.isMesh)node.castShadow=shadowCasters.has(node);});
+    if(renderer){
+      const joints=new Set([root,body,head,mug,tablet,mouth,...eyes]);
+      for(const segment of [...arms,...legs])for(const joint of Object.values(segment))joints.add(joint);
+      root.traverse(node=>{
+        if(node.isMesh)node.castShadow=shadowCasters.has(node);
+        // Hair, clothing and insignia inherit their joint's world transform.
+        if(!joints.has(node)){node.updateMatrix();node.matrixAutoUpdate=false;}
+      });
+    }
     return {root,body,head,arms,legs,mug,tablet,eyes,mouth,human:!!design};
   }
   const figures=crew.map((person,i)=>{
@@ -967,7 +969,8 @@ export function mountOffice(container, {wallpaper = false} = {}) {
   const rooms=buildRooms({parent:architecture,animated:dynamic,box,cyl,mesh,rod,group,globe,textureSurface,luminous,floorPad,litFloor,mixHex,THREE});
   const homes=Object.fromEntries(figures.map(f=>[f.id,{x:f.home.x,z:f.home.z,yaw:Math.PI}]));
   const life=createOfficeLife({locations:rooms.anchors,homes});
-  const president=Object.assign(character({id:'president',color:'#5a6e9a'}),{id:'president',name:'总裁 · 你'});
+  let transfer=null,transferKey='',transferStart=0;
+  const president=Object.assign(character({id:'president',color:'#5a6e9a'}),{id:'president',name:'呵呵大王'});
   president.root.scale.setScalar(.98);
   const people=[...figures,president];
   const locatorGeo=new THREE.RingGeometry(.53,.56,28);
@@ -1016,6 +1019,8 @@ export function mountOffice(container, {wallpaper = false} = {}) {
       });
       batch.castShadow=true;batch.receiveShadow=true;architecture.add(batch);
     }
+    architecture.updateMatrixWorld(true);
+    architecture.traverse(node=>{node.matrixAutoUpdate=false;node.matrixWorldAutoUpdate=false;});
   }
 
   let poseBatches=[],batchPopulation=0;
@@ -1043,23 +1048,25 @@ export function mountOffice(container, {wallpaper = false} = {}) {
         // The rig moves between desks, so a bounding sphere from its initial position expires.
         batch.frustumCulled=false;
         poseInstances.add(batch);
-        return {sources,batch};
+        return {sources,batch,lastSources:[]};
       });
       batchPopulation=poseRig.children.length;
     }
     poseRig.updateMatrixWorld(true);
-    for(const {sources,batch} of poseBatches){
-      let index=0;
+    for(const {sources,batch,lastSources} of poseBatches){
+      let index=0,colorsChanged=false;
       source: for(const mesh of sources){
         for(let node=mesh;node!==poseRig;node=node.parent)if(!node.visible)continue source;
         batch.setMatrixAt(index,mesh.matrixWorld);
-        if(batch.instanceColor)batch.setColorAt(index,mesh.material.color);
+        if(batch.instanceColor && lastSources[index]!==mesh){
+          batch.setColorAt(index,mesh.material.color);lastSources[index]=mesh;colorsChanged=true;
+        }
         index++;
       }
       batch.count=index;
       batch.visible=index>0;
       if(index)batch.instanceMatrix.needsUpdate=true;
-      if(index&&batch.instanceColor)batch.instanceColor.needsUpdate=true;
+      if(colorsChanged)batch.instanceColor.needsUpdate=true;
     }
   }
 
@@ -1073,6 +1080,10 @@ export function mountOffice(container, {wallpaper = false} = {}) {
   }
   let width=1,height=1,pixelRatio=1,lighting='day',selected=null,view='overview',callback=null,chatter=true;
   let sim=0,lastFrame=0,raf=0,disposed=false,visible=true,instantCamera=true,lastMarket='';
+  let nextFrame=0,lastShadow=-Infinity,lastTags=-Infinity;
+  const activeStatuses=new Set(['thinking','coding','browsing','terminal']);
+  function isWorking(person){return activeStatuses.has(person.status);}
+  function activeWork(){return summary?.running>0 || figures.some(isWorking) || guests.some(f=>f.online && f.root.visible && isWorking(f));}
   const aim=new THREE.Vector3(),camOffset=new THREE.Vector3(13,12.8,16.2).normalize().multiplyScalar(40);
   const initialYaw=Math.atan2(13,16.2),initialPitch=Math.asin(camOffset.y/40);
   let yaw=initialYaw,pitch=initialPitch,zoom=1,zoomCallback=null,orientationDirty=true;
@@ -1092,7 +1103,7 @@ export function mountOffice(container, {wallpaper = false} = {}) {
     name.style.cssText='font-weight:700;display:block;line-height:1.18';
     activity.style.cssText='display:block;font-weight:500;color:#cdd8ee;line-height:1.2;margin-top:1px';
     btn.append(name,activity);f.activityTag=activity;
-    btn.setAttribute('aria-label',f===president?'总裁 · 你，分配任务':'选择 '+f.name);
+    btn.setAttribute('aria-label',f===president?'呵呵大王，总裁，分配任务':'选择 '+f.name);
     Object.assign(btn.style,{
       position:'absolute',left:'0',top:'0',zIndex:'1',display:'block',whiteSpace:'nowrap',lineHeight:'1.1',
       padding:'3px 6px',border:'1px solid #7b91b490',borderRadius:'5px',backgroundColor:'#1c2942ed',
@@ -1288,7 +1299,7 @@ export function mountOffice(container, {wallpaper = false} = {}) {
         wrist.set(side*.275,.88,.44);
         tilt=-.02;
       }
-      if((pose==='attention'&&i)||pose==='celebrate'){
+      if(((pose==='attention'||pose==='error')&&i)||pose==='celebrate'){
         elbowPoint.set(side*.475,1.43,.17);
         wrist.set(side*.510,1.665+rock*.082,.31+rock*.036);
         tilt=-1.08;
@@ -1346,8 +1357,13 @@ export function mountOffice(container, {wallpaper = false} = {}) {
     const target=patrolStops[patrolIndex],pos=president.root.position;
     const dx=target[0]-pos.x,dz=target[1]-pos.z,dist=Math.hypot(dx,dz);
     const atReception=patrolIndex===5&&patrolPause>0;
+    const command=summary?.command;
+    const onDuty=command && command.phase!=='review' && sim%12<3.5;
     let walking=false;
-    if(patrolPause>0){
+    if(onDuty){
+      // Brief the team from the current safe position, then resume the patrol.
+      patrolWait=0;
+    }else if(patrolPause>0){
       patrolPause=Math.max(0,patrolPause-dt);
     }else if(movement){
       if(dist<.025){
@@ -1368,33 +1384,41 @@ export function mountOffice(container, {wallpaper = false} = {}) {
         }
       }
     }
-    const direction=atReception?0:walking?Math.atan2(dx,dz):president.root.rotation.y;
+    const direction=onDuty ? .65 : atReception?0:walking?Math.atan2(dx,dz):president.root.rotation.y;
     president.root.rotation.y+=Math.atan2(Math.sin(direction-president.root.rotation.y),Math.cos(direction-president.root.rotation.y))*blend;
-    poseCharacter(president,{seating:0,walking,step:patrolStep,pose:atReception?'briefing':'idle',t:sim,movement});
-    president.caption=atReception?'看简报 ing':'巡视 ing';
+    poseCharacter(president,{seating:0,walking,step:patrolStep,pose:onDuty?(command.phase==='blocked'?'attention':'briefing'):atReception?'briefing':'idle',t:sim,movement});
+    president.caption=command?.text || (summary?.reviews?'有 '+summary.reviews+' 项待验收':atReception?'看简报 ing':'巡视 ing');
     locator.position.set(pos.x,.067,pos.z);
   }
   function animateFigures(dt){
     const fx=animatedEffects();
     const movement=reduced.matches?0:1;
     const blend=reduced.matches?1:1-Math.exp(-dt*3.2);
-    const frames=life.tick(dt,{reducedMotion:reduced.matches,soft:effects==='soft',night:lighting==='night',obstacles:[president.root.position]});
+    const standby=summary?.command?.standby || '';
+    const frames=life.tick(dt,{reducedMotion:reduced.matches,soft:effects==='soft',night:lighting==='night',obstacles:[president.root.position],standby});
     rooms.update?.(sim,fx,frames.some(p=>p.pose==='game'&&!p.walking));
     figures.forEach((f,i)=>{
       const frame=frames.find(p=>p.id===f.id);
       if(!frame)return;
       const {walking,seated,pose}=frame,meetingSeat=pose==='meeting';
       const t=sim+i*1.73,active=pose==='type',pathPhase=frame.step;
-      f.caption=(frame.caption||'待命').replace(/(?:\s*ing|中)$/i,'')+' ing';f.speech=frame.speech||'';
+      const caption=frame.caption||'待命';
+      f.caption=['assigned','queued'].includes(f.status)||caption==='任务完成' ?
+        caption : caption.replace(/(?:\s*ing|中)$/i,'')+' ing';
+      if(wallpaper)f.caption=!f.reported?'待报到':f.id==='codex'&&codexEdit?editStages[codexEdit.stage]:workLabel(f.status,f.activity);
+      if(standby && f.status==='idle')f.caption=standby;
+      f.speech=wallpaper?'':frame.speech||'';
       f.root.position.set(frame.x,0,frame.z);
       const look=frame.angle;
       f.root.rotation.y+=Math.atan2(Math.sin(look-f.root.rotation.y),Math.cos(look-f.root.rotation.y))*blend;
       f.pose=pose;f.tag.dataset.pose=pose;
-      const station=stationScreens.get(f.id),phase=active&&fx?Math.floor(sim*1.7)%8:-1;
-      if(station.status!==f.status||station.activity!==f.activity||phase!==station.phase){
+      const edit=f.id==='codex'?codexEdit:null;
+      const station=stationScreens.get(f.id),phase=!edit&&f.status==='thinking'&&active&&fx?Math.floor(sim*1.7)%3:-1;
+      if(station.status!==f.status||station.activity!==f.activity||phase!==station.phase||station.edit!==edit){
+        station.edit=edit;
         station.status=f.status;station.activity=f.activity;station.phase=phase;
         station.display.refresh((...args)=>drawMonitor(...args,{id:f.id,color:f.color,status:f.status,
-          activity:f.activity,phase:Math.max(0,phase)}));
+          activity:f.activity,phase:Math.max(0,phase),edit}));
       }
       const engaged=!['idle','done','error'].includes(f.status);
       const wave=fx?.5-.5*Math.cos(t*(engaged?2.2:.82)):.5;
@@ -1405,6 +1429,12 @@ export function mountOffice(container, {wallpaper = false} = {}) {
       const pulse=fx?(t*.48)%1:.36;
       trail.band.scale.setScalar(.66+pulse*.43);
       trail.packets.forEach((packet,j)=>{
+        if(transfer&&f.id===transfer.sender){
+          const end=homes[transfer.receiver],u=(sim-transferStart)*.48-j*.14;
+          packet.visible=!!end&&fx&&u>=0&&u<=1;
+          if(packet.visible)packet.position.set(THREE.MathUtils.lerp(f.home.x,end.x,u),.35+Math.sin(u*Math.PI)*1.7,THREE.MathUtils.lerp(f.home.z,end.z,u));
+          return;
+        }
         packet.visible=meetingSeat&&fx;
         if(!packet.visible)return;
         const u=(sim*.24+j/3)%1;
@@ -1428,8 +1458,10 @@ export function mountOffice(container, {wallpaper = false} = {}) {
     guests.forEach((f,i)=>{
       if(!f.root.visible)return;
       const active=f.status==='thinking',done=f.status==='done',error=f.status==='error';
-      const pose=active?'type':error?'attention':f.online?'think':'idle';
-      f.caption=active?'处理分工 ing':done?'已交付':error?'需要协助':f.online?'在线待命':'等待连接';
+      const queued=f.status==='queued',assigned=f.status==='assigned';
+      const pose=active?'type':error?'attention':queued||assigned?'read':f.online?'think':'idle';
+      f.caption=active?'处理分工 ing':done?'已交付':error?'需要协助':
+        queued?'等待领取':assigned?'等待接力':f.online?'在线待命':'等待连接';
       poseCharacter(f,{seating:1,walking:false,step:0,pose,t:sim+i,movement,station:f.station,deskSeat:true});
     });
     const focus=figures.find(f=>f.id===selected);
@@ -1509,14 +1541,17 @@ export function mountOffice(container, {wallpaper = false} = {}) {
       if(!raf)raf=requestAnimationFrame(draw);
     }else{
       if(raf)cancelAnimationFrame(raf);
-      raf=lastFrame=rateStart=renderedFrames=0;
+      nextFrame=raf=lastFrame=rateStart=renderedFrames=0;
     }
   }
   function draw(frame){
-    raf=0;syncAnimation();
-    if(!raf)return;
-    const rate=context?12:wallpaper?20:30;
-    if(lastFrame && frame-lastFrame<1000/rate-1)return;
+    raf=0;
+    if(disposed || document.hidden || !visible || width<=1 || height<=1)return;
+    const rate=wallpaper?24:context?12:30;
+    const period=1000/rate;
+    // Keep the fractional remainder on 60 Hz and 144 Hz displays.
+    if(frame+.5<nextFrame){syncAnimation();return;}
+    nextFrame=nextFrame && frame-nextFrame<period?nextFrame+period:frame+period;
     const interval=lastFrame?frame-lastFrame:0;
     if(renderer&&!adaptiveSoft){
       if(!rateStart){rateStart=frame;renderedFrames=0;}
@@ -1531,21 +1566,26 @@ export function mountOffice(container, {wallpaper = false} = {}) {
     const dt=lastFrame?Math.min(.15,interval/1000):.08;
     lastFrame=frame;sim+=dt;
     const motion=animatedEffects();
-    const skyFrame=motion?Math.floor(sim*1.8):-1;
+    const skyFrame=motion?Math.floor(sim*(wallpaper?.5:1.8)):-1;
     if(windowFrame!==skyFrame){
       windowFrame=skyFrame;
       windowTexture.refresh((...args)=>drawWindow(...args,lighting==='night',motion?Math.sin(sim*.075)*.26:0,!motion));
     }
-    setCamera(dt);animateFigures(dt);placeTags();
+    setCamera(dt);animateFigures(dt);
+    if(!wallpaper || frame-lastTags>=95){placeTags();lastTags=frame;}
     if(renderer){
       updatePoseInstances();
+      if(wallpaper && frame-lastShadow>=(activeWork()?125:500)){
+        renderer.shadowMap.needsUpdate=true;lastShadow=frame;
+      }
       renderer.render(scene,camera);
     }else if(context)renderSoftware();
+    syncAnimation();
   }
   function resize() {
     const rect=container.getBoundingClientRect();
     width=Math.max(1,rect.width);height=Math.max(1,rect.height);
-    pixelRatio=Math.min(devicePixelRatio||1,wallpaper?1:width<900||context?1.5:1.7);
+    pixelRatio=wallpaper?(devicePixelRatio||1):Math.min(devicePixelRatio||1,width<900||context?1.5:1.7);
     if(renderer){renderer.setPixelRatio(pixelRatio);renderer.setSize(width,height,false);}
     else {drawingCanvas.width=Math.round(width*pixelRatio);drawingCanvas.height=Math.round(height*pixelRatio);}
     lastFrame=0;
@@ -1611,12 +1651,26 @@ export function mountOffice(container, {wallpaper = false} = {}) {
   resize();
   return {
     setGuests,
+    setSummary(value,hint='数据暂不可用'){
+      const key=JSON.stringify([value,hint]);
+      if(key===summaryKey)return;
+      summary=value;summaryKey=key;boardHint=hint;
+      transfer=value?.handoff||null;
+      const event=transfer?JSON.stringify(transfer):'';
+      if(event!==transferKey){transferKey=event;transferStart=sim;}
+      teamDisplay.refresh((c,w,h)=>drawTaskBoard(c,w,h,value,false,hint));
+      rooms.updateBoard(value,hint);
+    },
+    setCodexEdit(edit){
+      const signature=JSON.stringify(edit);
+      if(signature!==editSignature){editSignature=signature;codexEdit=edit;}
+    },
     setState(agents=[]) {
       life.setState(agents);
       figures.forEach(f=>{
         const agent=agents.find(a=>a.id===f.id),status=agent?.status||'idle';
         if(status==='done' && f.status!=='done')f.doneAt=sim;
-        f.status=status;f.activity=agent?.activity||'';f.collaborator=agent?.collaborator||null;
+        f.reported=!!agent?.updatedAt;f.status=status;f.activity=agent?.activity||'';f.collaborator=agent?.collaborator||null;
       });
     },
     setView(mode){

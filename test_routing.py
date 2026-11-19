@@ -19,6 +19,26 @@ def decision(*assignments):
 
 
 class RoutingTest(unittest.TestCase):
+    def test_review_accepts_display_brackets_only_for_actual_candidates(self):
+        from workflow import review_routing
+        candidates={"hydrogen":"Gemini 4 Hydrogen"}
+        result=review_routing(decision(("[hydrogen]","制作页面")),candidates)
+        self.assertEqual(result[1],{"hydrogen":"制作页面"})
+        self.assertIsNone(review_routing(decision(("[unlisted]","制作页面")), candidates))
+
+    def test_retry_reuses_saved_review_and_keeps_failure_history(self):
+        from workflow import new_step, recover_fallback
+        review=new_step("review","astra","review")
+        review.update(status="done",result=decision(("[hydrogen]","制作页面")))
+        failed=new_step("execute-argon","argon","execution")
+        failed.update(status="error",error="结果超过上限")
+        task=dict(brief="展示页",steps=[review,failed],routingSource="fallback",
+                  routingCandidates={"hydrogen":"Gemini 4 Hydrogen","argon":"Gemini 4 Argon"})
+        step=recover_fallback(task,failed)
+        self.assertEqual((task["routingSource"],step["agent"],step["status"]),("astra","hydrogen","pending"))
+        self.assertEqual(task["steps"][0]["status"],"done")
+        self.assertIn("结果超过上限",task["actionLog"][0]["message"])
+
     def setUp(self):
         self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.caps = {a: {"ready": a != "dot", "detail": a + " connection"} for a in NAMES}
@@ -106,6 +126,13 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual([s["id"] for s in task["steps"]],
                          ["plan","review","revision","final-review","execute-codex"])
         self.assertEqual(len(self.calls), 5)
+
+    def test_next_executor_receives_previous_deliverable(self):
+        self.reply["astra"] = decision(("hydrogen", "交付稿件"), ("codex", "检查已交付稿件"))
+        self.reply["hydrogen"] = "确切的正文内容"
+        task = self.completed(self.flow.create({"brief": "请撰写稿件并检查交付"}))
+        self.assertEqual(task["workers"], ["hydrogen", "codex"])
+        self.assertIn("确切的正文内容", self.calls[-1][1])
 
     def test_missing_coding_agent_never_marks_edits_complete(self):
         self.caps["codex"]["ready"] = False

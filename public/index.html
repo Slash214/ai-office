@@ -13,12 +13,18 @@
   <button id="wall-switch" class="secondary" hidden aria-pressed="false">开启桌面壁纸</button><span class="clock" title="本地时间"><i data-icon="clock"></i><time id="clock">--:--</time></span>
 </div></header>
 <main class="wrap" id="office">
-  <section class="intro"><div><h1>总裁指挥中心</h1><p>你定目标，Carbon 规划，Astra 分工，成果回到任务台。</p></div>
+  <section class="intro"><div><h1>呵呵大王的指挥中心</h1><p>你定目标，Carbon 规划，Astra 分工，成果回到任务台。</p></div>
     <div class="mode" role="group" aria-label="数据模式"><button id="live" aria-pressed="true"><i data-icon="radio"></i>实时</button><button id="demo" aria-pressed="false"><i data-icon="play"></i>演示</button></div>
   </section>
   <div class="workspace">
     <section class="panel scene" id="scene-panel" aria-labelledby="scene-title">
       <div class="bar"><h2 id="scene-title"><i data-icon="cube"></i>三维指挥舱</h2><div class="tools"><button id="fx-toggle" aria-label="绚彩光效" aria-pressed="true"><i data-icon="prism"></i><span>绚彩光效</span></button><button id="light" aria-label="切换灯光" title="切换灯光"></button><button id="sound" aria-label="环境音乐" aria-pressed="false" title="环境音乐"><i data-icon="mute"></i></button><button id="expand" aria-label="放大空间视图" title="放大空间视图"><i data-icon="expand"></i></button></div></div>
+      <button id="scene-task" class="scene-task" type="button" aria-controls="task-detail" hidden>
+        <span class="scene-task-prefix"><i class="signal"></i>工单</span>
+        <strong id="scene-task-title"></strong>
+        <span id="scene-task-state" role="status"></span>
+        <span id="scene-task-flow" class="task-flow" aria-label="任务流程"></span>
+      </button>
       <div class="viewport"><div class="viewport-label"><b></b><span id="scene-mode">连接中</span></div><div id="canvas" aria-label="可以旋转、缩放的三维办公室"></div><button id="desk-lens" hidden title="返回全景"><span></span><i data-icon="close"></i></button><button class="chatter-toggle" id="chatter" aria-pressed="true" title="显示预写的办公室闲聊。真实任务状态见团队成员。"><i data-icon="chat"></i>场景闲聊</button><span class="view-label" id="lighting-label">日间</span></div>
       <div class="camera"><div class="camera-presets" role="group" aria-label="切换视角"><button data-view="overview" aria-pressed="true">全景</button><button data-view="workstations" aria-pressed="false">工位</button><button data-view="meeting" aria-pressed="false">会议区</button><button data-view="lounge" aria-pressed="false">休闲区</button></div><div class="camera-zoom" role="group" aria-label="场景缩放"><button id="zoom-out" aria-label="缩小" title="缩小"><i data-icon="minus"></i></button><button id="reset-view" title="重置视角与缩放" aria-label="重置视角与缩放">100%</button><button id="zoom-in" aria-label="放大" title="放大"><i data-icon="plus"></i></button></div></div>
     </section>
@@ -31,11 +37,12 @@
 </main>
 <div class="sheet-mask" id="sheet-mask" hidden></div>
 <div class="mobile-actions"><button id="crew-open" class="secondary" aria-expanded="false" aria-controls="crew"><i data-icon="users"></i>团队成员 · 6</button><button id="mobile-dispatch" class="primary"><i data-icon="plus"></i>分配任务</button></div>
-<dialog aria-labelledby="welcome-title" id="welcome"><img class="welcome-logo" src="/brand.svg" alt="" width="51" height="51"><h2 id="welcome-title">总裁，欢迎回到工作室。</h2><p>六位成员已入驻。先看看办公室，或写下目标，让团队开始工作。</p><label class="check"><input type="checkbox" id="welcome-sound" checked>进入时播放轻音乐</label><button id="enter" class="primary">进入办公室<i data-icon="arrow"></i></button></dialog>
+<dialog aria-labelledby="welcome-title" id="welcome"><img class="welcome-logo" src="/brand.svg" alt="" width="51" height="51"><h2 id="welcome-title">呵呵大王，欢迎回到工作室。</h2><p>六位成员已入驻。先看看办公室，或写下目标，让团队开始工作。</p><label class="check"><input type="checkbox" id="welcome-sound" checked>进入时播放轻音乐</label><button id="enter" class="primary">进入办公室<i data-icon="arrow"></i></button></dialog>
 <dialog aria-labelledby="instructions-title" id="instructions"><div class="dialog-head"><h2 id="instructions-title">员工接入指南</h2><button class="close" aria-label="关闭"><i data-icon="close"></i></button></div><div id="connections"></div><h3>从自己的终端报到</h3><p>在项目目录运行。手动上报只接受预设状态和任务类别。</p><pre><code>python office.py report carbon thinking planning
 python office.py report carbon done planning</code></pre><p>任务台会为每个步骤生成交接文本。可复制到指定员工的会话，再把产出贴回。服务只在本机开放。</p></dialog>
 <dialog aria-labelledby="compose-title" id="compose"><div class="dialog-head"><h2 id="compose-title">分配新任务</h2><button class="close" aria-label="关闭"><i data-icon="close"></i></button></div><form id="new-task">
 <label for="brief">任务目标</label><textarea id="brief" rows="5" required maxlength="4000" autocomplete="off" aria-describedby="dispatch-flow" placeholder="例如：优化办公室 UI，让手机上也能一眼看清团队成员的状态。"></textarea>
+<label class="check"><input type="checkbox" id="desktop-txt">将最终正文保存为 Windows 桌面 TXT</label>
 <p class="hint" id="dispatch-flow">Carbon 规划，Astra 选择执行人。工作室开发任务可交给本机 Codex 修改代码并运行测试。派发后使用相应账号的额度，完成后由你验收。</p>
 <div class="form-error" role="status" id="new-error"></div><button class="primary" type="submit">派发并开始<i data-icon="arrow"></i></button></form></dialog>
 <dialog aria-labelledby="task-detail-title" id="task-detail" class="wide"><div class="dialog-head"><h2 id="task-detail-title">任务进度</h2><button class="close" aria-label="关闭"><i data-icon="close"></i></button></div><div id="task-content"></div></dialog>

@@ -3,6 +3,7 @@ import {mountEffects} from './effects.js';
 import {avatar} from './portraits.js';
 import {daylight, updateMarket} from './office-environment.js';
 import {mountConnections} from './connections.js';
+import {editStages,readWorkstation,readDesktopSummary} from './monitor.js';
 
 const roster = {
   carbon:{name:'Gemini 4 Carbon',short:'Carbon',role:'规划主管'},
@@ -12,7 +13,7 @@ const roster = {
   argon:{name:'Gemini 4 Argon',short:'Argon',role:'执行成员'},
   hydrogen:{name:'Gemini 4 Hydrogen',short:'Hydrogen',role:'执行成员'}
 };
-const states={idle:'空闲',coding:'写代码',terminal:'操作终端',browsing:'查阅资料',thinking:'思考中',needs_input:'需要你',error:'遇到问题',done:'已完成'};
+const states={idle:'空闲',assigned:'等待接力',queued:'已接单 · 排队',coding:'写代码',terminal:'操作终端',browsing:'查阅资料',thinking:'思考中',needs_input:'需要你',error:'遇到问题',done:'已完成'};
 const activities={general:'常规任务',code:'代码开发',research:'资料研究',review:'方案复核',writing:'撰写内容',planning:'任务规划',media:'媒体制作'};
 const paths={
   chat:'<path d="M20 11c0 4-3.5 7-8 7-1 0-2-.1-3-.4L5 20v-4a6.5 6.5 0 0 1-2-5c0-4 3.5-7 8.5-7S20 7 20 11Z"/><path d="M7 11h1m3 0h1m3 0h1"/>',
@@ -43,7 +44,7 @@ document.querySelectorAll('dialog').forEach(el=>el.addEventListener('click',e=>{
 }));
 let timer;
 function notify(text){const toast=$('#toast');toast.textContent=text;toast.hidden=false;clearTimeout(timer);timer=setTimeout(()=>toast.hidden=true,3500)}
-const tasks=mountTasks({roster,notify,icon,esc});
+const tasks=mountTasks({roster,notify,icon,esc,onTaskChange:()=>poll(true)});
 if (window.chrome?.webview && new URLSearchParams(location.search).get('desktop')==='1') {
   window.officeMayReleaseView=()=>!tasks.hasDraft() && !document.querySelector('dialog[open],.crew.opened') && !$('#slot-name').value.trim();
   window.officeOpenTask=id=>tasks.openFromTray(id);
@@ -61,6 +62,7 @@ function setDrawer(open){
 $('#crew-open').onclick=()=>setDrawer(true);
 $('#crew-close').onclick=$('#sheet-mask').onclick=()=>setDrawer(false);
 $('#mobile-dispatch').onclick=()=>$('#dispatch').click();
+document.addEventListener('office-show-dispatch',()=>{if($('#crew').classList.contains('opened'))setDrawer(false)});
 document.addEventListener('keydown',e=>{
   if(!$('#crew').classList.contains('opened')||document.querySelector('dialog[open]'))return;
   if(e.key==='Escape'){setDrawer(false);return}
@@ -73,6 +75,8 @@ matchMedia('(max-width:899px)').addEventListener('change',()=>{if($('#crew').cla
 const fresh=()=>Object.keys(roster).map(id=>({id,status:'idle',activity:'general',updatedAt:null,collaborator:null}));
 let real=fresh(),shown=fresh(),caps={},liveEvents=[],demoEvents=[],scene,disconnected=true,demo=false,demoPhase=0,selection=null,capPending=false;
 let guestSeats=[];
+let codexEdit=null;
+let desktopSummary=null;
 const effects=mountEffects({onChange:mode=>scene?.setEffects?.(mode)});
 let chatter=true;
 try{chatter=localStorage.getItem('hehe-office-chatter')!=='off'}catch{}
@@ -99,13 +103,18 @@ function demoStep(){
   render(data);
 }
 function badge(a){
-  const label=disconnected&&!demo?'未连接':a.updatedAt?states[a.status]:'待报到';
-  const kind=['needs_input','error'].includes(a.status)?'alert':a.status==='thinking'?'thinking':a.status!=='idle'?'working':'';
+  const labels={planning:'规划中',review:'审核中',writing:'撰写中'};
+  const state=(a.status==='thinking'&&labels[a.activity])||states[a.status]||states.idle;
+  const label=disconnected&&!demo?'未连接':a.updatedAt?state:'待报到';
+  const kind=['needs_input','error'].includes(a.status)?'alert':['assigned','queued'].includes(a.status)?'waiting':
+    a.status==='thinking'?'thinking':a.status!=='idle'?'working':'';
   return '<span class="state '+kind+'"><b class="signal"></b>'+esc(label)+'</span>';
 }
 function render(agents){
   shown=agents;
   scene?.setState(agents);
+  scene?.setCodexEdit(demo||disconnected?null:codexEdit);
+  scene?.setSummary(demo||disconnected?null:desktopSummary,demo?'演示模式':'数据暂不可用');
   scene?.setGuests(demo ? [] : guestSeats);
   $('#scene-mode').textContent=demo?'演示模式 · 模拟数据':disconnected?'连接中断':'实时视图';
   $('.viewport-label').classList.toggle('sim',demo||disconnected);
@@ -125,6 +134,15 @@ function profileText(){
   const detail=caps[selection]?.detail||'正在核对本机接入状态…';
   $('#dot-profile').hidden=selection!=='dot';
   $('#profile-content').innerHTML='<div class="line-name">'+avatar(selection)+'<strong style="margin-left:10px">'+p.name+'</strong>'+badge(a)+'</div><p>'+p.role+' · '+esc(detail)+'</p><p>'+(demo?'演示模式 · 模拟类别':'当前任务类别')+'　'+esc(a.updatedAt?activities[a.activity]:'待报到')+'<br>'+(demo?'模拟时间':'最后上报')+'　'+esc(a.updatedAt?new Date(a.updatedAt).toLocaleString('zh-CN'):'尚未收到')+'</p>';
+  if(selection==='codex'&&!demo&&!disconnected&&codexEdit){
+    const heading=document.createElement('strong');
+    heading.textContent=[editStages[codexEdit.stage],codexEdit.path].filter(Boolean).join(' · ');
+    $('#profile-content').append(heading);
+    if(codexEdit.lines?.length){
+      const snippet=document.createElement('pre');snippet.textContent=codexEdit.lines.join('\n');
+      $('#profile-content').append(snippet);
+    }
+  }
 }
 function openProfile(id){
   if(id.startsWith('slot-')){$('#open-slots').click();return;}
@@ -133,12 +151,14 @@ function openProfile(id){
   selection=id;scene?.setSelected(id);profileText();$('#profile').showModal();
 }
 $('#profile').addEventListener('close',()=>{selection=null;scene?.setSelected(focusedDesk)});
-let polling=false,initial=true;
-async function poll(){
-  if(polling)return;polling=true;
+let polling=false,initial=true,refreshRequested=false;
+async function poll(force=false){
+  if(polling){if(force)refreshRequested=true;return;}
+  polling=true;
   try{
     const res=await fetch('/api/status',{signal:AbortSignal.timeout(7500)});if(!res.ok)throw Error();
     const board=await res.json(),agents=board.agents;guestSeats=board.guestSeats||[];
+    [codexEdit,desktopSummary]=demo?[null,null]:await Promise.all([readWorkstation(agents),readDesktopSummary()]);
     for(const a of agents){
       if(!Object.hasOwn(roster,a.id))continue;
       const last=real.find(v=>v.id===a.id);
@@ -146,7 +166,11 @@ async function poll(){
         liveEvents.unshift({id:a.id,status:a.status,activity:a.activity,at:a.updatedAt});
     }
     liveEvents.sort((a,b)=>b.at.localeCompare(a.at));liveEvents=liveEvents.slice(0,20);initial=false;real=agents.filter(a=>Object.hasOwn(roster,a.id));disconnected=false;
-  }catch{disconnected=true}finally{polling=false;if(!demo)render(real)}
+  }catch{disconnected=true}finally{
+    polling=false;
+    if(!demo)render(real);
+    if(refreshRequested){refreshRequested=false;if(!document.hidden)void poll();}
+  }
 }
 function guideText(){
   $('#connections').innerHTML=Object.entries(roster).map(([id,r])=>'<div class="connection"><strong>'+r.name+'</strong> · '+(id==='dot'?'个人会话工单':caps[id]?(caps[id].ready?'CLI 已就绪':'人工交接'):'核对中')+'<small>'+esc(caps[id]?.detail||'正在读取本机 CLI 状态…')+'</small></div>').join('');
@@ -225,7 +249,7 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden){tick();po
 window.addEventListener('pagehide',e=>{if(!e.persisted){scene?.dispose();scene=null;}});
 setInterval(()=>{if(!document.hidden)loadCaps()},65000);
 import('./scene.js').then(({mountOffice})=>{
-  scene=mountOffice($('#canvas'));scene.setEffects?.(effects.mode);updateChatter();scene.setLighting(lighting);scene.setState(shown);scene.setGuests(demo?[]:guestSeats);scene.setView(view);if(focusedDesk)scene.focusDesk?.(focusedDesk);scene.setZoom?.(zoom);scene.onZoom?.(showZoom);scene.onSelect(openProfile);market();setInterval(()=>{if(!document.hidden)market()},60000);
+  scene=mountOffice($('#canvas'));scene.setEffects?.(effects.mode);updateChatter();scene.setLighting(lighting);scene.setState(shown);scene.setCodexEdit(demo||disconnected?null:codexEdit);scene.setGuests(demo?[]:guestSeats);scene.setView(view);if(focusedDesk)scene.focusDesk?.(focusedDesk);scene.setZoom?.(zoom);scene.onZoom?.(showZoom);scene.onSelect(openProfile);market();setInterval(()=>{if(!document.hidden)market()},60000);
 }).catch(()=>{$('#canvas').textContent='空间视图加载失败，请刷新页面重试。'});
 window.addEventListener('hashchange',()=>document.querySelectorAll('.mast nav a').forEach(a=>a.classList.toggle('current',a.hash===(location.hash||'#office'))));
 

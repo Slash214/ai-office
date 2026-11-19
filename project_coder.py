@@ -28,16 +28,41 @@ class CodeDelivery:
 
 
 @contextmanager
-def for_review(data_dir, previous=None):
-    token = _REVIEW.set((data_dir, previous))
+def for_review(data_dir, previous=None, on_progress=None):
+    token = _REVIEW.set((data_dir, previous, on_progress))
     try:
         yield
     finally:
         _REVIEW.reset(token)
+
+
+def progress(stage, **fields):
+    context = _REVIEW.get()
+    if context and context[2]:
+        context[2](stage, fields)
+
+
+def changed_excerpt(old, new):
+    """Sample the first actual difference, including pure deletions."""
+    before, after = old.splitlines(), new.splitlines()
+    first = 0
+    while first < min(len(before), len(after)) and before[first] == after[first]:
+        first += 1
+    end_old, end_new = len(before), len(after)
+    while end_old > first and end_new > first and before[end_old-1] == after[end_new-1]:
+        end_old -= 1
+        end_new -= 1
+    rows = after[first:min(first+5, end_new)] or before[first:min(first+5, end_old)]
+    sign = '+' if end_new > first else '−'
+    # The screen only carries a short local excerpt, never prompts or raw CLI logs.
+    sensitive = r'(?i)(?:password|passwd|secret|credential|api[_-]?key|token|authorization|private.key|sk-[\w-]{12,}|gh[pousr]_|bearer\s|://[^/\s]+@)'
+    return [sign + ' ' + ('•••' if re.search(sensitive, row) else
+                          ''.join(ch for ch in row[:110] if ch.isprintable() or ch == '\t'))
+            for row in rows]
 PUBLISH_LOCK = threading.Lock()
 SOURCE_DIRS = {"public", "native", "connectors"}
 SOURCE_TYPES = {".py", ".pyw", ".js", ".mjs", ".css", ".html", ".md", ".json", ".svg",
-                ".cs", ".manifest", ".ps1", ".cmd", ".png", ".jpg", ".webp", ".ico", ".txt"}
+                ".cs", ".manifest", ".ps1", ".cmd", ".png", ".jpg", ".webp", ".gif", ".ico", ".txt"}
 INPUT_DIRS = {Path("public/vendor"), Path("native/webview2")}
 EXCLUDE_FEATURES = ("shell_tool", "unified_exec", "view_image", "apps", "plugins", "hooks", "browser_use", "in_app_browser", "computer_use",
                     "image_generation", "multi_agent", "multi_agent_v2", "goals", "code_mode")
@@ -163,7 +188,14 @@ def apply_edits(work, edits):
             raise ValueError(f"{name} 的 before 匹配到 {count} 处。请直接使用文件标题的校验串和完整源码。")
         updates[target] = content.replace(old_raw,new_raw,1) if old_raw else new_raw
     for path,data in updates.items():
+        old = path.read_bytes() if path.is_file() else b""
         replace_file(path,data)
+        if old != data:
+            relative = path.relative_to(work).as_posix()
+            lines = []
+            if path.suffix.lower() in {".py", ".pyw", ".js", ".mjs", ".cs", ".css", ".html", ".svg"}:
+                lines = changed_excerpt(old.decode("utf8", "replace"), data.decode("utf8", "replace"))
+            progress("edited", path=relative, lines=lines)
 
 
 def code(cli, root, work, env, node, prompt):
@@ -177,7 +209,7 @@ def code(cli, root, work, env, node, prompt):
             "-c",'web_search="disabled"', "-c",'model_reasoning_effort="medium"',
             "-m", MODEL, "--output-schema",str(schema),"-o", str(answer), "-"]
     manifest=files(work)
-    paths={p.as_posix():p for p in manifest if p.suffix.lower() not in (".png",".jpg",".webp",".ico")
+    paths={p.as_posix():p for p in manifest if p.suffix.lower() not in (".png",".jpg",".webp",".gif",".ico")
            and not any(part in p.parents for part in INPUT_DIRS)}
     header=INSTRUCTIONS+"\n总裁的任务和团队分工\n"+prompt+"\n源码索引\n"+"\n".join(sorted(paths))
     # Start with explicitly named or small, clearly relevant source. The model can ask for any indexed file.
@@ -218,6 +250,7 @@ def code(cli, root, work, env, node, prompt):
             visible.append(name)
             context.append(content)
         packet=header+"\n"+"".join(context)+note
+        progress("reading" if visible else "planning", path=visible[0] if visible else "", lines=[])
         answer.unlink(missing_ok=True)
         status,_=execute(args,scratch,env,600,packet)
         if status or not answer.is_file() or answer.stat().st_size>768000:
@@ -361,6 +394,7 @@ def run(cli, root, prompt):
             scratch.mkdir()
             env = process_env(scratch)
             before, after = live, files(work)
+        progress("testing")
         record = verify(cli,root,work,env,node)
         if files(work) != after:
             raise RuntimeError("测试改变了待发布源码。未发布修改。")

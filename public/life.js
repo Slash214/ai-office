@@ -3,7 +3,8 @@ const MEETING = {
   carbon:[3.33,-3.47,0], astra:[5.03,-3.47,0], dot:[3.33,-.59,Math.PI],
   argon:[5.03,-.59,Math.PI], hydrogen:[6.33,-2.03,-Math.PI/2], codex:[2.03,-2.03,Math.PI/2],
 };
-const BUSY = new Set(['coding', 'terminal', 'browsing', 'thinking', 'needs_input', 'error']);
+const WAITING = new Set(['assigned', 'queued']);
+const BUSY = new Set(['assigned', 'queued', 'coding', 'terminal', 'browsing', 'thinking', 'needs_input', 'error']);
 const AMBIENT = {
   home: ['idle', '在工位小憩', '回工位'], coffee: ['coffee', '喝咖啡', '去茶水间'],
   arcade: ['game', '摸鱼打街机', '去游戏角'], rest: ['lounge', '沙发摸鱼', '去休息室'],
@@ -11,9 +12,11 @@ const AMBIENT = {
   chatA: ['chat', '聊两句', '去找同伴'], chatB: ['chat', '聊两句', '去找同伴'],
 };
 const WORK = {
+  assigned: ['read','等待接力'], queued: ['read','已接单排队'],
   coding: ['type','编写代码'], terminal: ['type','操作终端'], browsing: ['read','查阅资料'],
   thinking: ['think','梳理思路'], needs_input: ['attention','等待协助'], error: ['error','遇到问题'],
 };
+const THINKING = {planning:['think','规划任务'],review:['read','审核分工'],writing:['type','撰写文稿']};
 const BREAKS = ['coffee','home','print','rest','home','arcade','focus','home'];
 const CHAT = [
   ['茶水间还有冰咖啡。','等我这局结束！'],
@@ -376,7 +379,7 @@ export function createOfficeLife({homes,locations,now=Date.now}) {
   const people=Object.keys(homes).map((id,i)=>{
     const target=floor.stops.has(initial[i])?initial[i]:'home-'+id;
     const p={id,path:[],phase:i*.7,entry:null,retryAt:0,blockedSince:null,yielding:false,yieldUntil:0,
-      status:'idle',collaborator:null,stamp:null,celebrateUntil:0,
+      status:'idle',activity:null,collaborator:null,stamp:null,celebrateUntil:0,
       dwellUntil:[1.3,6.4,10.2,6,6,12][i],turn:i*2,ambient:target,row:{id}};
     snap(p,target,floor.stops.get(target));
     return p;
@@ -390,11 +393,11 @@ export function createOfficeLife({homes,locations,now=Date.now}) {
     for (const p of people) {
       const a=agents.find(entry=>entry.id===p.id), previous=p.status;
       const stamp=a?.updatedAt??null, age=stamp ? at-Date.parse(stamp) : 0;
-      const status=age>30*60*1000?'idle':(a?.status??'idle');
+      const status=a?.status??'idle';
       if(status==='done' && (previous!=='done'||stamp!==p.stamp) && age<12000)
         p.celebrateUntil=time+1.5;
       if(status!=='done')p.celebrateUntil=0;
-      p.status=status;p.stamp=stamp;p.collaborator=a?.collaborator??null;
+      p.status=status;p.activity=a?.activity??null;p.stamp=stamp;p.collaborator=a?.collaborator??null;
       if(BUSY.has(previous) && !BUSY.has(status)){
         p.ambient='home-'+p.id;
         p.dwellUntil=time+1.9;
@@ -406,7 +409,7 @@ export function createOfficeLife({homes,locations,now=Date.now}) {
     const pairs=new Map();
     for(const p of people){
       const other=byId.get(p.collaborator);
-      if(!other||other===p||!BUSY.has(p.status)||['needs_input','error'].includes(p.status)||
+      if(!other||other===p||!BUSY.has(p.status)||WAITING.has(p.status)||WAITING.has(other.status)||['needs_input','error'].includes(p.status)||
          ['needs_input','error'].includes(other.status)||other.celebrateUntil>time||
          pairs.has(p.id)||pairs.has(other.id))continue;
       pairs.set(p.id,other.id);pairs.set(other.id,p.id);
@@ -437,22 +440,25 @@ export function createOfficeLife({homes,locations,now=Date.now}) {
     return 'home-'+p.id;
   }
 
-  function tick(dt,{reducedMotion=false,soft=false,obstacles=[]}={}) {
+  function tick(dt,{reducedMotion=false,soft=false,obstacles=[],standby=''}={}) {
     const delta=Number.isFinite(dt)?Math.max(0,Math.min(dt,.10)):0;
     time+=delta;
     const pairs=meetings();
-    if(reducedMotion){
+    if(reducedMotion || standby){
       chat=null;nextChat=time+2.2;
     }else updateChat(pairs,soft);
     for(const p of people){
-      const r=p.row, station='home-'+p.id, work=WORK[p.status], partner=pairs.get(p.id);
+      const r=p.row, station='home-'+p.id, partner=pairs.get(p.id);
+      const work=(p.status==='thinking'&&THINKING[p.activity])||WORK[p.status];
       const seat=chat?.people.indexOf(p)??-1;
       const celebrating=p.celebrateUntil>time;
       let target,pose,caption,travel;
       if(partner){
-        target='meeting-'+p.id;pose='meeting';caption='协作讨论';travel='去会议区';
+        target='meeting-'+p.id;pose='meeting';caption=p.activity==='review'?'审核分工':'协作讨论';travel='去会议区';
       }else if(work){
-        target=station;[pose,caption]=work;travel='返回工位';
+        target=station;[pose,caption]=work;travel=WAITING.has(p.status)?'接单回工位':'返回工位';
+      }else if(standby && p.status==='idle'){
+        target=station;pose='read';caption=standby;travel='返回工位';
       }else{
         if(reducedMotion || (p.target?.startsWith('meeting-') && p.ambient?.startsWith('chat')))
           p.ambient=station;

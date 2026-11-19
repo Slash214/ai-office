@@ -7,23 +7,24 @@ const discussionNames = { revision: '按审核意见修订', 'final-review': '�
 const stateNames = { pending: '待接力', queued: '排队中', running: '正在运行', done: '已完成', error: '需要处理', handoff: '等待会话交付', cancelled: '已停止' };
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 
-export function mountTasks({ roster, notify, icon, esc }) {
+export function mountTasks({ roster, notify, icon, esc, onTaskChange }) {
   const byId = id => document.getElementById(id);
   const dispatch = byId('dispatch'), list = byId('task-list'), count = byId('task-count');
   const compose = byId('compose'), form = byId('new-task'), brief = byId('brief');
   const submit = form.querySelector('[type="submit"]');
   const detail = byId('task-detail'), content = byId('task-content');
+  const sceneTask = byId('scene-task'), sceneTaskTitle = byId('scene-task-title'), sceneTaskState = byId('scene-task-state');
   const preview = byId('release-preview'), previewStatus = byId('preview-status'), previewView = byId('preview-view');
   const previewCode = byId('preview-code'), previewDiff = byId('preview-diff');
   const drafts = new Map();
   let previewRequest = null;
   let submission = null;
-  let tasks = [], caps = {}, demo = false, selected = null;
+  let tasks = [], caps = {}, demo = false, selected = null, spotlight = null;
   let requestedTask = new URL(location.href).searchParams.get('task');
   let loaded = false, loading = false, revision = 0, writing = false, listError = '';
   let listMark = '', detailMark = '';
   let listTag = '';
-  const name = (id, task) => id === 'president' ? '总裁' : roster[id]?.name || task?.workerNames?.[id] || id;
+  const name = (id, task) => id === 'president' ? '呵呵大王' : roster[id]?.name || task?.workerNames?.[id] || id;
   const selectedTask = () => tasks.find(task => task.id === selected);
   const key = (task, step) => task.id + '/' + step.id;
   const current = task => task.steps.find(step => step.id === task.currentStep);
@@ -53,7 +54,7 @@ export function mountTasks({ roster, notify, icon, esc }) {
     const step = current(task);
     if (task.stoppedAt) return '已停止';
     if (task.rolledBackAt) return '已回退';
-    if (!step) return task.acceptedAt ? '已验收' : '待验收';
+    if (!step) return task.acceptedAt ? '已验收' : task.textDelivery?.state==='error'?'等待保存桌面文件':'待验收';
     if (step.status === 'queued') return '已排队 · 等待 '+name(step.agent,task);
     if (step.status === 'handoff' && task.workerNames?.[step.agent]) return name(step.agent,task)+(step.claimed?' · 连接器执行中':' · 等待领取');
     if (step.status === 'handoff') return name(step.agent,task)+' · 会话交接';
@@ -62,7 +63,49 @@ export function mountTasks({ roster, notify, icon, esc }) {
     return phaseNames[task.status] || kindNames[step.kind];
   }
 
+  function renderSceneTask() {
+    const active = tasks.find(task => current(task)?.status === 'running');
+    const waiting = tasks.find(task => task.currentStep && !task.stoppedAt);
+    const delivery = tasks.find(task => task.status === 'complete' && !task.acceptedAt);
+    const task = demo ? null : tasks.find(item => item.id === spotlight) || active || waiting || delivery;
+    sceneTask.hidden = !task;
+    if (!task) return;
+    const step = current(task);
+    let state = statusLabel(task);
+    if (step?.status === 'running') {
+      const phase = { plan:'正在规划', review:'正在审核', execution:'正在执行' }[step.kind] || '正在运行';
+      state = (roster[step.agent]?.short || name(step.agent, task)) + ' · ' + phase;
+    }
+    const title = task.brief.trim().split(/\r?\n/)[0].slice(0, 180);
+    sceneTask.dataset.task = task.id;
+    sceneTask.dataset.tone = step?.status === 'error' ? 'error' : step ? 'active' : 'result';
+    if (sceneTaskTitle.textContent !== title) sceneTaskTitle.textContent = title;
+    if (sceneTaskState.textContent !== state) sceneTaskState.textContent = state;
+    sceneTask.title = title + ' · ' + state;
+    const flow=byId('scene-task-flow');
+    const nodes=task.steps.filter(s=>s.kind!=='approval').map(s=>({
+      label:(roster[s.agent]?.short||name(s.agent,task))+' '+({plan:'规划',review:'分工',execution:'执行'}[s.kind]||''),
+      status:s.status,
+    }));
+    nodes.push({label:'呵呵大王验收',status:task.stoppedAt?'cancelled':task.acceptedAt?'done':step?'pending':'ready'});
+    const mark=JSON.stringify(nodes);
+    if(flow.dataset.mark!==mark){
+      flow.dataset.mark=mark;
+      flow.replaceChildren(...nodes.map(node=>{
+        const el=document.createElement('span');
+        el.dataset.state=node.status;
+        const state=stateNames[node.status]||(node.status==='ready'?'待验收':'');
+        el.textContent=node.label;
+        el.title=node.label+' · '+state;
+        el.setAttribute('aria-label',el.title);
+        if(node.status==='running'||node.status==='ready')el.setAttribute('aria-current','step');
+        return el;
+      }));
+    }
+  }
+
   function renderList() {
+    renderSceneTask();
     const msg = demo ? '演示模式 · 切回实时可查看本机任务。' :
       listError || (!loaded ? '正在读取本机任务…' : '');
     const signature = JSON.stringify([msg, tasks.map(t => [t.id, t.updatedAt, statusLabel(t)])]);
@@ -129,6 +172,7 @@ export function mountTasks({ roster, notify, icon, esc }) {
       actions += '<button type="button" class="primary" data-action="accept" data-focus="accept">'+icon('check')+
         (release ? '验收并发布' : '验收通过')+'</button>';
     }
+    if((task.textDelivery?.state==='error'||task.canExportDesktopTxt)&&!accepted)actions='<button type="button" class="primary" data-action="desktop-txt">'+(task.canExportDesktopTxt?'保存 TXT 到桌面':'重新保存到桌面')+'</button>';
     const revision = accepted ? '' :
       '<details class="review-feedback" data-disclosure="review-feedback"><summary>打回修改</summary>' +
       '<label for="reject-note">返工意见</label><textarea id="reject-note" data-focus="reject-note" rows="3" maxlength="2000" placeholder="具体说明你希望调整的地方…">' +
@@ -170,9 +214,8 @@ export function mountTasks({ roster, notify, icon, esc }) {
       const isCurrent = item.id === task.currentStep;
       const state = stateNames[item.status];
       let result = '';
-      if (item.result) result = '<details data-disclosure="result-' + esc(item.id) + '"' +
-        (item.kind === 'execution' && !task.currentStep ? ' open' : '') +
-        '><summary>' + (item.agent==='codex'?'代码改动与测试记录':item.agent==='dot' && item.result.startsWith('来源：总裁办公室从个人 Dot') ? '会话实录 · 人工转交' : '查看成果') + '</summary><div class="result">' + esc(item.result) + '</div></details>';
+      if (item.result) result = '<details data-disclosure="result-' + esc(item.id) +
+        '"><summary>' + (item.agent==='codex'?'代码改动与测试记录':item.agent==='dot' && item.result.startsWith('来源：总裁办公室从个人 Dot') ? '会话实录 · 人工转交' : '查看成果') + '</summary><div class="result">' + esc(item.result) + '</div></details>';
       if (item.blockedReview && item.result !== item.blockedReview) result += '<details data-disclosure="result-objection"><summary>复审提出的问题</summary><div class="result">' + esc(item.blockedReview) + '</div></details>';
       return '<li class="step"' + (isCurrent ? ' aria-current="step"' : '') + '><h3>' +
         esc(name(item.agent,task)) + ' · ' + esc(discussionNames[item.id] || kindNames[item.kind]) + '<small>' + esc(item.status==='handoff' && task.workerNames?.[item.agent] ? (item.claimed?'执行中':'待领取') : state) + '</small></h3>' +
@@ -185,10 +228,19 @@ export function mountTasks({ roster, notify, icon, esc }) {
     const delivery = completed ? deliveryControls(task) : step
       ? '<div class="delivery-bar"><button type="button" class="secondary stop-action" data-action="stop" data-focus="stop">停止任务</button>' +
         '<div class="form-error" role="status" id="action-error"></div></div>' : '';
+    const file=task.textDelivery;
+    const fileStatus=file?.state==='saved'?'<p class="delivery-file"><strong>已保存到桌面</strong><br>'+esc(file.filename)+'</p>':
+      file?.state==='error'?'<p>文件尚未保存。请检查桌面写入权限后重试。</p>':'';
+    const finalText=completed&&!file&&!task.release?task.steps.filter(s=>s.kind==='execution'&&s.result).at(-1)?.result:'';
     content.innerHTML = '<p class="task-brief">' + esc(task.brief) + '</p><p>'+esc(statusLabel(task))+
       (task.routingMode==='auto'?' · 团队自动分工':' · 自动接力')+'</p>' +
+      fileStatus+(finalText?'<details data-disclosure="final"><summary>查看交付正文</summary><div class="result">'+esc(finalText)+'</div></details>':'')+
+      (step?.status==='error'&&caps[step.agent]?.ready?'<button class="secondary" data-action="retry">重试当前步骤</button>':'')+
+      delivery+'<details class="task-log" data-disclosure="log"><summary>运行日志与错误记录</summary>'+
       (task.assignmentReason?'<p>分工理由 · '+esc(task.assignmentReason)+'</p>':'')+
-      '<ol class="steps">' + steps + '</ol>'+delivery;
+      (file?.error?'<p class="form-error">'+esc(file.error)+'</p>':'')+
+      (task.actionLog||[]).map(line=>'<p class="form-error">'+esc(formatTime(line.at))+' · '+esc(line.message)+'</p>').join('')+
+      '<ol class="steps">' + steps + '</ol></details>';
     for (const disclosure of content.querySelectorAll('details')) {
       const id = disclosure.dataset.disclosure;
       if (expanded.has(id) && (sameStep || (sameTask && id.startsWith('result-')))) disclosure.open = expanded.get(id);
@@ -217,6 +269,7 @@ export function mountTasks({ roster, notify, icon, esc }) {
     loaded = true;
     renderList();
     renderDetail();
+    onTaskChange?.();
   }
 
   async function refresh() {
@@ -306,6 +359,7 @@ export function mountTasks({ roster, notify, icon, esc }) {
     const row = event.target.closest('[data-task]');
     if (row) openTask(tasks.find(task => task.id === row.dataset.task));
   });
+  sceneTask.addEventListener('click', () => openTask(tasks.find(task => task.id === sceneTask.dataset.task)));
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (demo || writing) return;
@@ -320,13 +374,19 @@ export function mountTasks({ roster, notify, icon, esc }) {
     lockControls();
     error.textContent = '';
     try {
-      if (!submission || submission.brief !== briefText) submission = {brief:briefText, id:crypto.randomUUID()};
-      const { task } = await api('/api/tasks', { brief: briefText, requestId:submission.id });
+      const desktopTxt=byId('desktop-txt').checked;
+      if (!submission || submission.brief !== briefText || submission.desktopTxt!==desktopTxt) submission = {brief:briefText,desktopTxt,id:crypto.randomUUID()};
+      const { task } = await api('/api/tasks', { brief: briefText, requestId:submission.id,...(desktopTxt?{desktopTxt:true}:{}) });
       submission = null;
+      spotlight = task.id;
       remember(task);
       form.reset();
       if (compose.open) compose.close();
-      if (!demo) openTask(task);
+      if (!demo) {
+        document.dispatchEvent(new Event('office-show-dispatch'));
+        sceneTask.scrollIntoView({ block:'nearest', behavior:'instant' });
+        sceneTask.focus({ preventScroll:true });
+      }
     } catch (err) {
       error.textContent = err instanceof TypeError ? '未收到服务响应。请先查看任务台确认是否已创建。' : err.message;
       void refresh();
@@ -360,10 +420,10 @@ export function mountTasks({ roster, notify, icon, esc }) {
       location.reload();
       return;
     }
-    if (['accept', 'reject', 'rollback', 'stop'].includes(action)) {
+    if (['accept', 'reject', 'rollback', 'stop','desktop-txt'].includes(action)) {
       if (writing) return;
       const errorBox=byId('action-error');
-      const payload = action === 'stop' ? {} : candidate(task);
+      const payload = ['stop','desktop-txt'].includes(action) ? {} : candidate(task);
       if (action === 'reject') {
         const note = byId('reject-note');
         payload.feedback = note.value.trim();

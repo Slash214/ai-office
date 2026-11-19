@@ -204,6 +204,18 @@ def preview(root, release_id, relative, *, data_dir=None):
     return _blob(folder, digest)
 
 
+def text_output(root, release_id, *, data_dir=None):
+    _, store = _store(root, data_dir)
+    folder = _directory(store, release_id)
+    manifest, _ = _read(folder)
+    texts = [(Path(name).name, digest) for name, _, digest in manifest["changes"]
+             if digest and name.lower().endswith(".txt")]
+    if len(texts) != 1:
+        raise ValueError("未找到唯一的 TXT 交付文件")
+    name, digest = texts[0]
+    return name, _blob(folder, digest)
+
+
 def diff(root, release_id, *, data_dir=None):
     """Return a bounded, plain-text diff of the release's actual source changes."""
     _, store = _store(root, data_dir)

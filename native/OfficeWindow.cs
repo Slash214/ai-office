@@ -19,6 +19,8 @@ internal sealed class OfficeWindow : Form
     private readonly Uri home = new Uri("http://127.0.0.1:" + Program.Port + "/");
     private readonly Color night = Color.FromArgb(12, 17, 35);
     private readonly NotifyIcon tray;
+    private readonly TrayMascot mascot;
+    private readonly DesktopPet pet;
     private readonly ToolStripMenuItem toggle;
     private readonly ToolStripMenuItem reminders = new ToolStripMenuItem("打开待办提醒") { Visible = false };
     private readonly Timer refresh = new Timer { Interval = 3000 };
@@ -68,9 +70,16 @@ internal sealed class OfficeWindow : Form
         toggle = new ToolStripMenuItem("开启桌面壁纸", null, async delegate { await ChangeWallpaper(wallpaper == null); });
         toggle.Enabled = false;
         menu.Items.Add(toggle);
+        var petToggle = new ToolStripMenuItem("显示桌宠");
+        menu.Items.Add(petToggle);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出工作室", null, delegate { exit = true; Close(); });
-        tray = new NotifyIcon { Icon = officeIcon, Text = Program.Title, ContextMenuStrip = menu, Visible = true };
+        tray = new NotifyIcon { Icon = officeIcon, Text = Program.Title + " · 呵呵大王", ContextMenuStrip = menu };
+        mascot = new TrayMascot(tray);
+        pet = new DesktopPet(mascot, RestoreOffice, delegate(string id) { requestedTask = id; RestoreOffice(); }, menu);
+        petToggle.Click += delegate { pet.Toggle(); };
+        menu.Opening += delegate { petToggle.Text = pet.Visible ? "隐藏桌宠" : "显示桌宠"; };
+        tray.Visible = true;
         tray.DoubleClick += delegate { RestoreOffice(); };
         tray.BalloonTipClicked += delegate {
             string task = balloonTask;
@@ -83,7 +92,7 @@ internal sealed class OfficeWindow : Form
         refresh.Tick += RefreshDesktop;
         releaseHiddenOffice.Tick += delegate {
             releaseHiddenOffice.Stop();
-            if (OfficeVisible || !mayReleaseWhileHidden || wallpaper == null || browser == null) return;
+            if (OfficeVisible || !mayReleaseWhileHidden || browser == null) return;
             var old = browser;
             browser = null;
             lastOfficeVisible = null;
@@ -98,7 +107,10 @@ internal sealed class OfficeWindow : Form
         VisibleChanged += delegate { UpdateOfficeActivity(); };
         LocationChanged += delegate { ScheduleViewportLayout(); };
         Activated += delegate { ScheduleViewportLayout(); };
-        Shown += async delegate { await OpenOffice(); };
+        Shown += async delegate {
+            if (pet.EnabledAtStart) pet.Show();
+            await OpenOffice();
+        };
     }
 
     internal void QueueCommand(bool? requestWallpaper)
@@ -266,7 +278,7 @@ internal sealed class OfficeWindow : Form
 
     private void ScheduleHiddenRelease()
     {
-        if (!OfficeVisible && browser != null && wallpaper != null && mayReleaseWhileHidden)
+        if (!OfficeVisible && browser != null && mayReleaseWhileHidden)
             releaseHiddenOffice.Start();
         else
             releaseHiddenOffice.Stop();
@@ -473,11 +485,11 @@ internal sealed class OfficeWindow : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        if (!exit && wallpaper != null && e.CloseReason == CloseReason.UserClosing)
+        if (!exit && (wallpaper != null || pet.Visible) && e.CloseReason == CloseReason.UserClosing)
         {
             e.Cancel = true;
             Hide();
-            ShowBalloon(2500, "办公室仍在桌面运行", "双击托盘图标可以回到工作室派单。", ToolTipIcon.Info);
+            ShowBalloon(2500, "办公室仍在桌面运行", "双击桌宠或托盘图标可以回到工作室派单。", ToolTipIcon.Info);
         }
         base.OnFormClosing(e);
     }
@@ -492,6 +504,8 @@ internal sealed class OfficeWindow : Form
             releaseHiddenOffice.Dispose();
             tray.Visible = false;
             tray.Dispose();
+            pet.Dispose();
+            mascot.Dispose();
             menu.Dispose();
             officeIcon.Dispose();
         }
